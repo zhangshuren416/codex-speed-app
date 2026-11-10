@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta
+    http-equiv="Content-Security-Policy"
+    content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:;"
+  />
+  <title>Codex Speed</title>
+  <link rel="stylesheet" href="hud.css" />
+</head>
+<body>
+  <div class="hud" id="hud">
+    <header class="head">
+      <span class="brand">CODEX SPEED</span>
+      <span class="badges">
+        <span class="badge pin" id="pin" hidden>已钉住</span>
+        <span class="badge status" id="status">空闲</span>
+        <button class="menu-btn" id="menu" title="菜单" aria-label="菜单">⋯</button>
+      </span>
+    </header>
+
+    <div class="rate-row">
+      <span class="rate" id="tps">—</span>
+      <span class="unit">tok/s</span>
+    </div>
+
+    <div class="turn" id="turn">本轮 —</div>
+
+    <canvas id="spark" class="spark"></canvas>
+    <div class="hint" id="hint"></div>
+  </div>
+
+  <script src="hud.js"></script>
+</body>
+</html>

@@ -1,0 +1,78 @@
+{
+  "name": "codex-speed-app",
+  "version": "0.1.0",
+  "description": "Standalone floating speedometer for Codex sessions. Reads local rollout logs, no plugin required.",
+  "type": "module",
+  "main": "src/main/index.mjs",
+  "license": "MIT",
+  "author": {
+    "name": "codex-speed",
+    "email": "codex-speed@users.noreply.github.com"
+  },
+  "homepage": "https://github.com/zhangshuren416/codex-speed-app",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/zhangshuren416/codex-speed-app.git"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "electron .",
+    "test": "node test/engine.test.mjs",
+    "smoke": "node scripts/smoke.mjs",
+    "dist": "electron-builder",
+    "dist:win": "electron-builder --win",
+    "dist:mac": "electron-builder --mac",
+    "dist:linux": "electron-builder --linux"
+  },
+  "devDependencies": {
+    "electron": "^45.2.3",
+    "electron-builder": "^26.18.0"
+  },
+  "build": {
+    "appId": "com.zhangshuren.codexspeed",
+    "productName": "Codex Speed",
+    "asar": true,
+    "asarUnpack": [
+      "assets/**"
+    ],
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "src/**/*",
+      "assets/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ],
+      "icon": "build/icon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "deleteAppDataOnUninstall": false
+    },
+    "mac": {
+      "target": [
+        "dmg"
+      ],
+      "category": "public.app-category.developer-tools",
+      "icon": "build/icon.png"
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Development",
+      "icon": "build/icon.png"
+    }
+  }
+}

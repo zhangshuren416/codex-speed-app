@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta
+    http-equiv="Content-Security-Policy"
+    content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:;"
+  />
+  <title>Codex Speed</title>
+  <link rel="stylesheet" href="dashboard.css" />
+</head>
+<body>
+  <header class="top">
+    <div class="title">
+      <h1>Codex Speed</h1>
+      <div class="sub" id="sub">正在读取本地会话日志…</div>
+    </div>
+    <div class="actions">
+      <button class="btn ghost" id="openData">数据目录</button>
+      <button class="btn ghost" id="quit">退出</button>
+    </div>
+  </header>
+
+  <section class="cards">
+    <article class="card">
+      <div class="label">当前速度</div>
+      <div class="big"><span id="tps">—</span><span class="unit">tok/s</span></div>
+      <div class="meta"><span class="pill" id="status">空闲</span></div>
+    </article>
+    <article class="card">
+      <div class="label">本轮</div>
+      <div class="big"><span id="turnRate">—</span><span class="unit">tok/s</span></div>
+      <div class="meta" id="turnMeta">—</div>
+    </article>
+    <article class="card">
+      <div class="label">会话平均</div>
+      <div class="big"><span id="sessionRate">—</span><span class="unit">tok/s</span></div>
+      <div class="meta" id="sessionMeta">—</div>
+    </article>
+    <article class="card">
+      <div class="label">首 token</div>
+      <div class="big"><span id="ttft">—</span><span class="unit" id="ttftUnit"></span></div>
+      <div class="meta" id="ttftMeta">—</div>
+    </article>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head">
+      <h2>最近会话</h2>
+      <div class="panel-actions">
+        <span class="hint" id="followHint">自动跟随最近写入的会话</span>
+        <button class="btn" id="unpin">恢复自动跟随</button>
+      </div>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>会话</th>
+            <th>模型</th>
+            <th class="num">速度</th>
+            <th class="num">输出</th>
+            <th>状态</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="sessions"></tbody>
+      </table>
+      <div class="empty" id="sessionsEmpty" hidden>没有找到会话日志。先在 Codex 里发一条消息。</div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head"><h2>最近几轮</h2></div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>结束时间</th>
+            <th class="num">输出</th>
+            <th class="num">响应速度</th>
+            <th class="num">墙钟速度</th>
+            <th class="num">首 token</th>
+          </tr>
+        </thead>
+        <tbody id="turns"></tbody>
+      </table>
+      <div class="empty" id="turnsEmpty" hidden>本轮还没有完成的响应。</div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head"><h2>设置</h2></div>
+    <div class="settings">
+      <label class="field">
+        <span>不透明度</span>
+        <input id="opacity" type="range" min="20" max="100" step="5" />
+        <output id="opacityOut">94%</output>
+      </label>
+      <label class="field">
+        <span>缩放</span>
+        <select id="scale">
+          <option value="0.8">80%</option>
+          <option value="1">100%</option>
+          <option value="1.25">125%</option>
+          <option value="1.5">150%</option>
+        </select>
+      </label>
+      <label class="check"><input id="alwaysOnTop" type="checkbox" /><span>始终置顶</span></label>
+      <label class="check"><input id="clickThrough" type="checkbox" /><span>点击穿透（Ctrl+Alt+S）</span></label>
+      <label class="check"><input id="startAtLogin" type="checkbox" /><span>开机自启</span></label>
+      <label class="check"><input id="hideDock" type="checkbox" /><span>隐藏 Dock 图标（macOS）</span></label>
+      <div class="field wide">
+        <span>Codex 数据目录</span>
+        <input id="codexHome" type="text" placeholder="留空使用 ~/.codex（或 CODEX_HOME）" />
+        <button class="btn" id="saveHome">保存</button>
+      </div>
+      <div class="foot" id="foot"></div>
+    </div>
+  </section>
+
+  <script src="dashboard.js"></script>
+</body>
+</html>
