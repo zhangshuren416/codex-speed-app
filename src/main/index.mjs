@@ -65,7 +65,20 @@ if (process.env.CODEX_SPEED_USER_DATA) {
 }
 
 const HUD_WIDTH = 300;
-const HUD_HEIGHT = 168;
+// 高度由渲染进程按实际内容量回来（hudFields 决定行数），这里只保留上下限兜底
+const HUD_MIN_HEIGHT = 60;
+const HUD_MAX_HEIGHT = 460;
+
+// 悬浮窗“显示内容”菜单：key 与 settings.mjs 的 HUD_FIELDS 对应
+const HUD_FIELD_LABELS = [
+  ["tps", "当前速度"],
+  ["ttft", "首 token 时延"],
+  ["mspt", "每 token 时延"],
+  ["latency", "响应耗时"],
+  ["turn", "本轮摘要"],
+  ["session", "会话均速"],
+  ["spark", "迷你曲线"],
+];
 
 let settings = null;
 let monitor = null;
@@ -77,6 +90,8 @@ let lastSnapshot = null;
 let sessionsCache = { at: 0, value: null };
 let quitting = false;
 let moveTimer = null;
+// 当前 HUD 的内容高度（CSS 像素）。缩放时再乘以 scale 得到窗口 DIP 尺寸。
+let hudHeightCss = 196;
 
 /* ------------------------------------------------------------------ *
  * 日志
@@ -157,6 +172,7 @@ async function boot() {
   if (IS_WIN) app.setAppUserModelId("com.zhangshuren.codexspeed");
 
   settings = new SettingsStore(path.join(app.getPath("userData"), "settings.json"));
+  hudHeightCss = estimateHudHeight(settings.get("hudFields"));
   monitor = new Monitor({
     codexHome: resolveCodexHome(settings.get("codexHome")),
     pinnedFile: settings.get("pinnedFile"),
@@ -244,14 +260,39 @@ function attachWindowDiagnostics(win, name) {
   });
 }
 
+/**
+ * 估算 HUD 内容高度：只在第一帧（渲染进程还没量完）和窗口重建时用。
+ * 数值是 CSS 像素，与 hud.css 的间距大致对应，不必精确——渲染进程会回报真实高度。
+ */
+function estimateHudHeight(fields) {
+  const has = (key) => Array.isArray(fields) && fields.includes(key);
+  let height = 21; // 上下内边距
+  height += 20; // 标题行
+  if (has("tps")) height += 46;
+  const cells = ["ttft", "mspt", "latency", "session"].filter(has).length;
+  if (cells) height += Math.ceil(cells / 2) * 17 + 6;
+  if (has("turn")) height += 15;
+  if (has("spark")) height += 45;
+  return Math.min(HUD_MAX_HEIGHT, Math.max(HUD_MIN_HEIGHT, Math.round(height)));
+}
+
+function hudPixelSize() {
+  const scale = settings.get("scale");
+  return {
+    width: Math.round(HUD_WIDTH * scale),
+    height: Math.round(hudHeightCss * scale),
+  };
+}
+
 function createHud() {
   if (hudWin) return;
   const position = restorePosition();
   const scale = settings.get("scale");
+  const size = hudPixelSize();
 
   hudWin = new BrowserWindow({
-    width: Math.round(HUD_WIDTH * scale),
-    height: Math.round(HUD_HEIGHT * scale),
+    width: size.width,
+    height: size.height,
     x: position.x,
     y: position.y,
     frame: false,
@@ -338,7 +379,7 @@ function createHud() {
 function restorePosition() {
   const scale = settings.get("scale");
   const w = Math.round(HUD_WIDTH * scale);
-  const h = Math.round(HUD_HEIGHT * scale);
+  const h = Math.round(hudHeightCss * scale);
   const saved = settings.get("hudPosition");
   if (saved) {
     const display = screen.getDisplayNearestPoint({ x: saved.x, y: saved.y });
@@ -355,11 +396,42 @@ function restorePosition() {
 function applyAppearance() {
   if (!hudWin || hudWin.isDestroyed()) return;
   const scale = settings.get("scale");
-  hudWin.setContentSize(Math.round(HUD_WIDTH * scale), Math.round(HUD_HEIGHT * scale));
+  const size = hudPixelSize();
+  hudWin.setContentSize(size.width, size.height);
   hudWin.webContents.setZoomFactor(scale);
   hudWin.setOpacity(settings.get("opacity"));
   applyAlwaysOnTop();
   applyClickThrough();
+}
+
+/** 变高/变矮后别让窗口滑出屏幕（至少留 80px 宽、40px 高可见）。 */
+function keepHudOnScreen() {
+  if (!hudWin || hudWin.isDestroyed()) return;
+  const [x, y] = hudWin.getPosition();
+  const [w, h] = hudWin.getSize();
+  const display = screen.getDisplayNearestPoint({
+    x: x + Math.round(w / 2),
+    y: y + Math.round(h / 2),
+  });
+  const area = display.workArea;
+  const nextX = Math.min(Math.max(x, area.x - w + 80), area.x + area.width - 80);
+  const nextY = Math.min(Math.max(y, area.y), area.y + area.height - 40);
+  if (nextX !== x || nextY !== y) hudWin.setPosition(nextX, nextY, false);
+}
+
+/** 渲染进程量完内容后回报 CSS 高度；只有变化超过 1px 才真正改窗口。 */
+function applyHudContentHeight(cssHeight) {
+  const value = Number(cssHeight);
+  if (!Number.isFinite(value)) return hudHeightCss;
+  const next = Math.min(HUD_MAX_HEIGHT, Math.max(HUD_MIN_HEIGHT, Math.round(value)));
+  if (Math.abs(next - hudHeightCss) < 1) return hudHeightCss;
+  hudHeightCss = next;
+  if (hudWin && !hudWin.isDestroyed()) {
+    const size = hudPixelSize();
+    hudWin.setContentSize(size.width, size.height);
+    keepHudOnScreen();
+  }
+  return hudHeightCss;
 }
 
 function applyAlwaysOnTop() {
@@ -534,6 +606,7 @@ const SETTING_KEYS = new Set([
   "startAtLogin",
   "hideDock",
   "refreshMs",
+  "hudFields",
 ]);
 
 function sanitizeSettingsPatch(patch) {
@@ -613,6 +686,21 @@ function opacityLabel(value) {
   return `${Math.round(value * 100)}%`;
 }
 
+/** 悬浮窗“显示内容”子菜单。每次点击都从当前设置重新读，避免菜单项状态过期。 */
+function hudFieldsSubmenu() {
+  return HUD_FIELD_LABELS.map(([key, label]) => ({
+    label,
+    type: "checkbox",
+    checked: (settings.get("hudFields") ?? []).includes(key),
+    click: (item) => {
+      const next = new Set(settings.get("hudFields") ?? []);
+      if (item.checked) next.add(key);
+      else next.delete(key);
+      updateSettings({ hudFields: [...next] });
+    },
+  }));
+}
+
 function trayTemplate() {
   const s = settings.all();
   const hudVisible = Boolean(hudWin && !hudWin.isDestroyed() && hudWin.isVisible());
@@ -655,6 +743,10 @@ function trayTemplate() {
         checked: Math.abs(s.scale - value) < 0.01,
         click: () => updateSettings({ scale: value }),
       })),
+    },
+    {
+      label: "显示内容",
+      submenu: hudFieldsSubmenu(),
     },
     { type: "separator" },
     {
@@ -726,6 +818,10 @@ function hudContextMenu() {
         checked: Math.abs(s.scale - value) < 0.01,
         click: () => updateSettings({ scale: value }),
       })),
+    },
+    {
+      label: "显示内容",
+      submenu: hudFieldsSubmenu(),
     },
     { type: "separator" },
     {
@@ -804,6 +900,9 @@ function installIpc() {
     updateSettings({ clickThrough: !settings.get("clickThrough") });
     return settings.get("clickThrough");
   });
+
+  // HUD 内容高度随“显示内容”变化；由渲染进程测量后回报，主进程只负责改窗口尺寸
+  ipcMain.handle("hud:resize", (_event, cssHeight) => applyHudContentHeight(cssHeight));
 
   ipcMain.handle("window:open-dashboard", () => {
     showDashboard();

@@ -20,15 +20,17 @@
       </span>
     </header>
 
-    <div class="rate-row">
+    <div class="rate-row" id="rateRow">
       <span class="rate" id="tps">—</span>
       <span class="unit">tok/s</span>
     </div>
 
-    <div class="turn" id="turn">本轮 —</div>
+    <div class="stats" id="stats" hidden></div>
 
-    <canvas id="spark" class="spark"></canvas>
-    <div class="hint" id="hint"></div>
+    <div class="turn" id="turn" hidden>本轮 —</div>
+
+    <canvas id="spark" class="spark" hidden></canvas>
+    <div class="hint" id="hint" hidden></div>
   </div>
 
   <script src="hud.js"></script>

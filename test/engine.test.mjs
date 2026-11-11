@@ -1,9 +1,17 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { RolloutReader } from "../src/main/engine/rollout.mjs";
 import { computeMetrics } from "../src/main/engine/metrics.mjs";
 import { Monitor } from "../src/main/engine/monitor.mjs";
+import {
+  DEFAULTS,
+  HUD_FIELDS,
+  SettingsStore,
+  normalizeHudFields,
+} from "../src/main/settings.mjs";
 import { makeHome, writeRollout, entry, responseLines } from "./helpers.mjs";
 
 const BASE = Date.parse("2026-11-01T00:00:01Z");
@@ -205,4 +213,34 @@ test("没有会话日志时返回 no-session", () => {
   const snap = monitor.tick();
   assert.equal(snap.ok, false);
   assert.equal(snap.reason, "no-session");
+});
+
+test("悬浮窗显示字段：未知项被丢弃、去重、按固定顺序排列", () => {
+  assert.deepEqual(normalizeHudFields(["spark", "bogus", "tps", "tps"]), ["tps", "spark"]);
+  assert.deepEqual(normalizeHudFields(["latency", "ttft"]), ["ttft", "latency"]);
+  // 空数组是合法状态（用户把显示内容全关了），不能被补回默认值
+  assert.deepEqual(normalizeHudFields([]), []);
+  // 旧版设置文件没有这个键、或值被写坏时回落到默认值
+  assert.deepEqual(normalizeHudFields(undefined), DEFAULTS.hudFields);
+  assert.deepEqual(normalizeHudFields("tps"), DEFAULTS.hudFields);
+  assert.equal(HUD_FIELDS.length, 7);
+});
+
+test("设置持久化：hudFields 能读回并保持规范顺序", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-speed-settings-"));
+  try {
+    const file = path.join(dir, "settings.json");
+    const store = new SettingsStore(file);
+    store.set({ hudFields: ["latency", "tps", "unknown"] });
+    store.save();
+    const reloaded = new SettingsStore(file);
+    assert.deepEqual(reloaded.get("hudFields"), ["tps", "latency"]);
+
+    // 损坏的设置文件不能把悬浮窗变成空白
+    fs.writeFileSync(file, JSON.stringify({ hudFields: "broken" }));
+    const fixed = new SettingsStore(file);
+    assert.deepEqual(fixed.get("hudFields"), DEFAULTS.hudFields);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });

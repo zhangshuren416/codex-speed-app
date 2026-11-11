@@ -19,6 +19,7 @@ contextBridge.exposeInMainWorld("codexSpeed", {
   listSessions: (limit) => ipcRenderer.invoke("sessions:list", limit),
   showContextMenu: () => ipcRenderer.invoke("hud:context-menu"),
   hideHud: () => ipcRenderer.invoke("hud:hide"),
+  setHudSize: (cssHeight) => ipcRenderer.invoke("hud:resize", cssHeight),
   toggleClickThrough: () => ipcRenderer.invoke("hud:toggle-click-through"),
   openDashboard: () => ipcRenderer.invoke("window:open-dashboard"),
   openUserData: () => ipcRenderer.invoke("app:open-user-data"),

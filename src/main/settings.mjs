@@ -3,6 +3,19 @@
 import fs from "node:fs";
 import path from "node:path";
 
+// 悬浮窗可显示的指标。顺序即显示顺序；hudFields 里只保存用户勾选的子集。
+export const HUD_FIELDS = Object.freeze([
+  "tps", // 主数字：当前速度
+  "ttft", // 首 token 时延
+  "mspt", // 每 token 时延
+  "latency", // 单次响应端到端耗时
+  "turn", // 本轮摘要
+  "session", // 会话均速
+  "spark", // 迷你曲线
+]);
+
+const DEFAULT_HUD_FIELDS = Object.freeze(["tps", "ttft", "mspt", "latency", "turn", "spark"]);
+
 export const DEFAULTS = Object.freeze({
   opacity: 0.94,
   scale: 1,
@@ -14,7 +27,22 @@ export const DEFAULTS = Object.freeze({
   startAtLogin: false,
   hideDock: false,
   refreshMs: 1000,
+  hudFields: DEFAULT_HUD_FIELDS,
 });
+
+/**
+ * 规范化显示字段：丢掉未知项、去重、按 HUD_FIELDS 的固定顺序排列。
+ * 旧版设置文件里没有这个键（undefined）时回落到默认值；显式传空数组表示
+ * “什么都不显示”，这是合法状态，不要把它当成缺失再补回默认值。
+ */
+export function normalizeHudFields(value) {
+  if (!Array.isArray(value)) return [...DEFAULT_HUD_FIELDS];
+  const picked = new Set();
+  for (const item of value) {
+    if (typeof item === "string" && HUD_FIELDS.includes(item)) picked.add(item);
+  }
+  return HUD_FIELDS.filter((field) => picked.has(field));
+}
 
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
@@ -33,6 +61,7 @@ export class SettingsStore {
       const raw = JSON.parse(fs.readFileSync(this.file, "utf8"));
       if (raw && typeof raw === "object" && !Array.isArray(raw)) {
         this.data = { ...DEFAULTS, ...raw };
+        this.data.hudFields = normalizeHudFields(this.data.hudFields);
       }
     } catch {
       /* 首次启动或文件损坏：使用默认值 */
@@ -57,6 +86,7 @@ export class SettingsStore {
     next.clickThrough = Boolean(next.clickThrough);
     next.startAtLogin = Boolean(next.startAtLogin);
     next.hideDock = Boolean(next.hideDock);
+    next.hudFields = normalizeHudFields(next.hudFields);
     if (next.pinnedFile !== null && typeof next.pinnedFile !== "string") next.pinnedFile = null;
     if (next.codexHome !== null && typeof next.codexHome !== "string") next.codexHome = null;
     if (next.hudPosition !== null) {

@@ -40,8 +40,22 @@ const el = {
   hideDock: $("hideDock"),
   codexHome: $("codexHome"),
   saveHome: $("saveHome"),
+  hudFields: $("hudFields"),
   foot: $("foot"),
 };
+
+// 悬浮窗可显示的指标，顺序与主进程 settings.mjs 的 HUD_FIELDS 一致
+const HUD_FIELD_OPTIONS = [
+  ["tps", "当前速度"],
+  ["ttft", "首 token 时延"],
+  ["mspt", "每 token 时延"],
+  ["latency", "响应耗时"],
+  ["turn", "本轮摘要"],
+  ["session", "会话均速"],
+  ["spark", "迷你曲线"],
+];
+
+const hudFieldInputs = new Map();
 
 /* ---------------------------------------------------------------- *
  * 格式化
@@ -279,6 +293,35 @@ function setChecked(element, value) {
   element.checked = Boolean(value);
 }
 
+/* 悬浮窗显示内容：勾选立即生效，悬浮窗自己会按内容调整高度 */
+function buildHudFieldInputs() {
+  if (!el.hudFields) return;
+  el.hudFields.replaceChildren();
+  for (const [key, label] of HUD_FIELD_OPTIONS) {
+    const wrap = document.createElement("label");
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.addEventListener("change", () => {
+      const picked = HUD_FIELD_OPTIONS.filter(([k]) => hudFieldInputs.get(k)?.checked).map(
+        ([k]) => k
+      );
+      api?.updateSettings({ hudFields: picked });
+    });
+    const text = document.createElement("span");
+    text.textContent = label;
+    wrap.append(input, text);
+    el.hudFields.append(wrap);
+    hudFieldInputs.set(key, input);
+  }
+}
+
+function renderHudFields(s) {
+  const picked = new Set(Array.isArray(s.hudFields) ? s.hudFields : []);
+  for (const [key, input] of hudFieldInputs) {
+    if (document.activeElement !== input) input.checked = picked.has(key);
+  }
+}
+
 function renderSettings() {
   const s = state.settings;
   if (!s) return;
@@ -291,11 +334,13 @@ function renderSettings() {
   setChecked(el.startAtLogin, s.startAtLogin);
   setChecked(el.hideDock, s.hideDock);
   el.hideDock.disabled = state.platform !== "darwin";
+  renderHudFields(s);
   setValue(el.codexHome, s.codexHome ?? "");
 
   el.sub.textContent = `数据源：${state.codexHome} · v${state.version}`;
   el.foot.textContent =
     "只读取本地会话日志，不上传任何数据。速度按“每次响应”统计，不是逐 token 实时值。" +
+    " 悬浮窗显示哪些指标可在上方勾选，或右键悬浮窗用「显示内容」随时切换。" +
     " 快捷键：Ctrl+Alt+S 切换点击穿透，Ctrl+Alt+H 显示/隐藏悬浮窗。";
 }
 
@@ -384,6 +429,7 @@ function bindEvents() {
 }
 
 async function init() {
+  buildHudFieldInputs();
   bindEvents();
   if (!api) {
     el.sub.textContent = "预加载脚本未加载，请通过 Electron 启动。";
