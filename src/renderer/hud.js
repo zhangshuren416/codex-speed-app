@@ -362,6 +362,14 @@ function applySettings(next) {
   settings = next;
   document.documentElement.dataset.theme = next?.theme === "light" ? "light" : "dark";
   document.body.classList.toggle("through", Boolean(next?.clickThrough));
+  // 不透明度走 CSS（body opacity），与主进程 applyHudOpacity 的口径一致：浅色强制 1。
+  // Windows 上不能用原生 setOpacity——它给透明窗口加 WS_EX_LAYERED(LWA_ALPHA)，
+  // 与逐像素 alpha 冲突，收起/展开缩放后气泡背后会露出灰色正方形底。
+  // 注意不能加在 .hud/.bubble 上：滑入/滑出关键帧会覆盖元素自身的 opacity。
+  const opacity = next?.theme === "light" ? 1 : Number(next?.opacity);
+  document.body.style.opacity = Number.isFinite(opacity)
+    ? String(Math.min(1, Math.max(0, opacity)))
+    : "";
   if (fieldsChanged) lastStatKey = null; // 字段变了要重建统计格
   if (themeChanged) drawSpark(); // 主题切换立即重绘曲线配色
 }

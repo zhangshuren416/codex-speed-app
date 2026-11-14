@@ -15,8 +15,11 @@
   --accent-ring: rgba(16, 163, 127, 0.45);
   --warn-ring: rgba(232, 179, 75, 0.4);
   --accent-glow: rgba(16, 163, 127, 0.8);
-  --shadow-card: 0 10px 28px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.04);
-  --shadow-bubble: 0 6px 18px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  /* 只保留内高光，不用外阴影：窗口尺寸与内容完全一致，外阴影本就应被窗口裁掉、
+     永远不可见；但带 transform 动画的合成层会把外阴影泄漏进窗口四角，
+     在浅色背景上呈现为圆形气泡/卡片背后的灰色正方形底。 */
+  --shadow-card: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  --shadow-bubble: inset 0 1px 0 rgba(255, 255, 255, 0.05);
   --font-ui: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", "PingFang SC", sans-serif;
   --font-mono: "Cascadia Mono", Consolas, "SF Mono", ui-monospace, monospace;
 }
@@ -38,8 +41,8 @@
   --accent-ring: rgba(11, 138, 104, 0.45);
   --warn-ring: rgba(168, 111, 18, 0.45);
   --accent-glow: rgba(11, 138, 104, 0.5);
-  --shadow-card: 0 10px 28px rgba(15, 23, 42, 0.16), inset 0 1px 0 rgba(255, 255, 255, 0.8);
-  --shadow-bubble: 0 6px 18px rgba(15, 23, 42, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.8);
+  --shadow-card: inset 0 1px 0 rgba(255, 255, 255, 0.8);
+  --shadow-bubble: inset 0 1px 0 rgba(255, 255, 255, 0.8);
 }
 
 * {

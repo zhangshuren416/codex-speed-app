@@ -787,10 +787,19 @@ function applyAppearance() {
   applyClickThrough();
 }
 
-/** HUD 不透明度：浅色强制 1——半透明白卡叠在任何非白背景上都会混成灰（灰蒙根源）；深色按用户设置。 */
+/** HUD 不透明度：浅色强制 1——半透明白卡叠在任何非白背景上都会混成灰（灰蒙根源）；深色按用户设置。
+ * Windows 上不能用原生 setOpacity：它会给窗口加 WS_EX_LAYERED 并走 LWA_ALPHA 常量 alpha
+ * （见 Electron native_window_views.cc SetOpacity），与透明窗口的逐像素 alpha
+ * （WS_EX_NOREDIRECTIONBITMAP）互斥，窗口缩放（气泡收起/展开）后会在圆形气泡/卡片
+ * 背后露出一块灰色正方形底（electron/electron#32555）。改由渲染进程把不透明度应用到
+ * body 的 CSS opacity（见 hud.js applySettings），窗口本身保持完全透明。
+ * 设置里的 opacity/theme 会随 broadcastState/broadcastSettings 推到渲染进程，无需单独 IPC。
+ * macOS 的原生实现没有这个冲突，保持原样。 */
 function applyHudOpacity() {
   if (!hudWin || hudWin.isDestroyed()) return;
-  hudWin.setOpacity(settings.get("theme") === "light" ? 1 : settings.get("opacity"));
+  if (IS_MAC) {
+    hudWin.setOpacity(settings.get("theme") === "light" ? 1 : settings.get("opacity"));
+  }
 }
 
 /** 变高/变矮后别让窗口滑出屏幕（至少留 80px 宽、40px 高可见）。 */
