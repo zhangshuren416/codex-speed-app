@@ -7,8 +7,39 @@
   --dim2: #6b7484;
   --accent: #10a37f;
   --warn: #e8b34b;
+  /* 语义色：徽章底/悬停底/强调淡底/描边/光晕/阴影，浅色主题统一覆盖 */
+  --chip-bg: rgba(255, 255, 255, 0.06);
+  --hover-bg: rgba(255, 255, 255, 0.08);
+  --accent-soft: rgba(16, 163, 127, 0.15);
+  --warn-soft: rgba(232, 179, 75, 0.14);
+  --accent-ring: rgba(16, 163, 127, 0.45);
+  --warn-ring: rgba(232, 179, 75, 0.4);
+  --accent-glow: rgba(16, 163, 127, 0.8);
+  --shadow-card: 0 10px 28px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  --shadow-bubble: 0 6px 18px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.05);
   --font-ui: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", "PingFang SC", sans-serif;
   --font-mono: "Cascadia Mono", Consolas, "SF Mono", ui-monospace, monospace;
+}
+
+/* 浅色主题：纯白不透明卡片 + 近黑文字，干净通透、对比清晰（不再灰蒙） */
+:root[data-theme="light"] {
+  --bg-1: #ffffff;
+  --bg-2: #fafbfd;
+  --border: rgba(15, 23, 42, 0.14);
+  --text: #101216;
+  --dim: #47505e;
+  --dim2: #67707e;
+  --accent: #0b8a68;
+  --warn: #a86f12;
+  --chip-bg: rgba(15, 23, 42, 0.06);
+  --hover-bg: rgba(15, 23, 42, 0.07);
+  --accent-soft: rgba(11, 138, 104, 0.13);
+  --warn-soft: rgba(168, 111, 18, 0.15);
+  --accent-ring: rgba(11, 138, 104, 0.45);
+  --warn-ring: rgba(168, 111, 18, 0.45);
+  --accent-glow: rgba(11, 138, 104, 0.5);
+  --shadow-card: 0 10px 28px rgba(15, 23, 42, 0.16), inset 0 1px 0 rgba(255, 255, 255, 0.8);
+  --shadow-bubble: 0 6px 18px rgba(15, 23, 42, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.8);
 }
 
 * {
@@ -43,12 +74,12 @@ body {
   border: 1px solid var(--border);
   border-radius: 14px;
   background: linear-gradient(180deg, var(--bg-1), var(--bg-2));
-  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  box-shadow: var(--shadow-card);
   -webkit-app-region: drag;
 }
 
 body.through .hud {
-  border-color: rgba(232, 179, 75, 0.4);
+  border-color: var(--warn-ring);
 }
 
 .head {
@@ -75,7 +106,7 @@ body.through .hud {
 .badge {
   padding: 4px 7px;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--chip-bg);
   color: var(--dim);
   font-size: 10px;
   line-height: 1;
@@ -83,17 +114,17 @@ body.through .hud {
 
 .badge.pin {
   color: var(--accent);
-  background: rgba(16, 163, 127, 0.14);
+  background: var(--accent-soft);
 }
 
 .status.tone-accent {
   color: var(--accent);
-  background: rgba(16, 163, 127, 0.16);
+  background: var(--accent-soft);
 }
 
 .status.tone-warn {
   color: var(--warn);
-  background: rgba(232, 179, 75, 0.14);
+  background: var(--warn-soft);
 }
 
 .status.tone-dim {
@@ -115,7 +146,7 @@ body.through .hud {
 }
 
 .menu-btn:hover {
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--hover-bg);
   color: var(--text);
 }
 
@@ -204,4 +235,213 @@ body.through .hud {
   font-size: 9.5px;
   white-space: nowrap;
   text-overflow: ellipsis;
+}
+
+/* ------------------------------------------------------------------ *
+ * 边缘吸附气泡：收起时整个窗口就是这一个圆泡（边长与主进程
+ * BUBBLE_SIZE_CSS 一致，窗口尺寸 = 40px × scale）
+ * ------------------------------------------------------------------ */
+body.docked .hud {
+  display: none;
+}
+
+.bubble {
+  position: relative;
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: linear-gradient(180deg, var(--bg-1), var(--bg-2));
+  box-shadow: var(--shadow-bubble);
+  -webkit-app-region: drag;
+  cursor: pointer;
+  animation: bubble-in 200ms cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.bubble-rate {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: -0.3px;
+  color: var(--text);
+}
+
+.bubble-dot {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--dim2);
+}
+
+.bubble[data-tone="accent"] {
+  border-color: var(--accent-ring);
+}
+
+.bubble[data-tone="accent"] .bubble-dot {
+  background: var(--accent);
+  box-shadow: 0 0 6px var(--accent-glow);
+}
+
+.bubble[data-tone="warn"] .bubble-dot {
+  background: var(--warn);
+}
+
+body.through .bubble {
+  border-color: var(--warn-ring);
+}
+
+/* ------------------------------------------------------------------ *
+ * 展开/收回动画：卡片从吸附边滑入/滑出。窗口几何由主进程一步切换，
+ * 透明窗口裁切卡片，视觉上即「从屏幕边缘弹出」。方向由 body.edge-* 决定；
+ * 滑入用 ease-out  expo 曲线（快出慢停），滑出用 ease-in（加速离场）。
+ * ------------------------------------------------------------------ */
+.hud.slide-in,
+.hud.slide-out {
+  will-change: transform, opacity;
+}
+
+.hud.slide-in {
+  animation-duration: 240ms;
+  animation-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
+  animation-fill-mode: both;
+}
+
+.hud.slide-out {
+  animation-duration: 180ms;
+  animation-timing-function: cubic-bezier(0.4, 0, 1, 1);
+  animation-fill-mode: both;
+}
+
+body.edge-right .hud.slide-in {
+  animation-name: hud-in-right;
+  transform-origin: right center;
+}
+body.edge-left .hud.slide-in {
+  animation-name: hud-in-left;
+  transform-origin: left center;
+}
+body.edge-top .hud.slide-in {
+  animation-name: hud-in-top;
+  transform-origin: center top;
+}
+body.edge-bottom .hud.slide-in {
+  animation-name: hud-in-bottom;
+  transform-origin: center bottom;
+}
+
+body.edge-right .hud.slide-out {
+  animation-name: hud-out-right;
+  transform-origin: right center;
+}
+body.edge-left .hud.slide-out {
+  animation-name: hud-out-left;
+  transform-origin: left center;
+}
+body.edge-top .hud.slide-out {
+  animation-name: hud-out-top;
+  transform-origin: center top;
+}
+body.edge-bottom .hud.slide-out {
+  animation-name: hud-out-bottom;
+  transform-origin: center bottom;
+}
+
+@keyframes hud-in-right {
+  from {
+    opacity: 0;
+    transform: translateX(105%) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
+}
+@keyframes hud-in-left {
+  from {
+    opacity: 0;
+    transform: translateX(-105%) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
+}
+@keyframes hud-in-top {
+  from {
+    opacity: 0;
+    transform: translateY(-105%) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+@keyframes hud-in-bottom {
+  from {
+    opacity: 0;
+    transform: translateY(105%) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes hud-out-right {
+  from {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateX(105%) scale(0.96);
+  }
+}
+@keyframes hud-out-left {
+  from {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateX(-105%) scale(0.96);
+  }
+}
+@keyframes hud-out-top {
+  from {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(-105%) scale(0.96);
+  }
+}
+@keyframes hud-out-bottom {
+  from {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(105%) scale(0.96);
+  }
+}
+
+/* 气泡收回时带轻微回弹的弹出 */
+@keyframes bubble-in {
+  from {
+    opacity: 0;
+    transform: scale(0.5);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
 }

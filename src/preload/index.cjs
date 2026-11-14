@@ -20,6 +20,8 @@ contextBridge.exposeInMainWorld("codexSpeed", {
   showContextMenu: () => ipcRenderer.invoke("hud:context-menu"),
   hideHud: () => ipcRenderer.invoke("hud:hide"),
   setHudSize: (cssHeight) => ipcRenderer.invoke("hud:resize", cssHeight),
+  onDockState: (callback) => subscribe("hud:dock-state", callback),
+  toggleBubblePin: () => ipcRenderer.invoke("hud:bubble-pin"),
   toggleClickThrough: () => ipcRenderer.invoke("hud:toggle-click-through"),
   openDashboard: () => ipcRenderer.invoke("window:open-dashboard"),
   openUserData: () => ipcRenderer.invoke("app:open-user-data"),

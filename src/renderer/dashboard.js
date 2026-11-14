@@ -34,8 +34,10 @@ const el = {
   opacity: $("opacity"),
   opacityOut: $("opacityOut"),
   scale: $("scale"),
+  theme: $("theme"),
   alwaysOnTop: $("alwaysOnTop"),
   clickThrough: $("clickThrough"),
+  edgeSnap: $("edgeSnap"),
   startAtLogin: $("startAtLogin"),
   hideDock: $("hideDock"),
   codexHome: $("codexHome"),
@@ -329,8 +331,11 @@ function renderSettings() {
   setValue(el.opacity, pct);
   el.opacityOut.textContent = `${pct}%`;
   setValue(el.scale, String(s.scale));
+  setValue(el.theme, s.theme ?? "dark");
+  document.documentElement.dataset.theme = s.theme === "light" ? "light" : "dark";
   setChecked(el.alwaysOnTop, s.alwaysOnTop);
   setChecked(el.clickThrough, s.clickThrough);
+  setChecked(el.edgeSnap, s.edgeSnap);
   setChecked(el.startAtLogin, s.startAtLogin);
   setChecked(el.hideDock, s.hideDock);
   el.hideDock.disabled = state.platform !== "darwin";
@@ -341,6 +346,7 @@ function renderSettings() {
   el.foot.textContent =
     "只读取本地会话日志，不上传任何数据。速度按“每次响应”统计，不是逐 token 实时值。" +
     " 悬浮窗显示哪些指标可在上方勾选，或右键悬浮窗用「显示内容」随时切换。" +
+    " 悬浮窗拖到屏幕边缘会自动收成小气泡：悬停展开、点击固定、拖走恢复。" +
     " 快捷键：Ctrl+Alt+S 切换点击穿透，Ctrl+Alt+H 显示/隐藏悬浮窗。";
 }
 
@@ -398,9 +404,14 @@ function bindEvents() {
     api?.updateSettings({ scale: Number(el.scale.value) });
   });
 
+  el.theme.addEventListener("change", () => {
+    api?.updateSettings({ theme: el.theme.value });
+  });
+
   for (const [element, key] of [
     [el.alwaysOnTop, "alwaysOnTop"],
     [el.clickThrough, "clickThrough"],
+    [el.edgeSnap, "edgeSnap"],
     [el.startAtLogin, "startAtLogin"],
     [el.hideDock, "hideDock"],
   ]) {

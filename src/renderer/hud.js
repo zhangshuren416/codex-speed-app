@@ -39,6 +39,8 @@ let lastSpark = null;
 let lastStatKey = null;
 let lastHeight = 0;
 let resizeFrame = 0;
+// 边缘吸附状态（主进程是唯一事实来源）：收起时窗口只剩一个气泡
+let dockState = { docked: false, expanded: false, pinned: false, edge: null };
 
 const statValues = new Map(); // key -> value element
 
@@ -52,6 +54,8 @@ const els = {
   pin: $("pin"),
   hint: $("hint"),
   spark: $("spark"),
+  bubble: $("bubble"),
+  bubbleRate: $("bubbleRate"),
 };
 
 function fields() {
@@ -187,6 +191,22 @@ function render() {
   }
   if (els.pin) els.pin.hidden = !snap?.pinned;
 
+  // 气泡：吸附收起时显示紧凑速度 + 状态点，口径与主数字一致
+  if (els.bubble) {
+    els.bubble.dataset.tone = status.tone;
+    let bubbleText = "—";
+    if (snap?.ok) {
+      const live = snap.live ?? {};
+      const value = Number(live.tokensPerSec);
+      if (Number.isFinite(value) && (live.lastResponse || value > 0)) {
+        bubbleText = fmtCompact(value);
+      }
+    }
+    if (els.bubbleRate && els.bubbleRate.textContent !== bubbleText) {
+      els.bubbleRate.textContent = bubbleText;
+    }
+  }
+
   // 主数字：当前速度
   const showRate = shows("tps");
   if (els.rateRow) els.rateRow.hidden = !showRate;
@@ -257,6 +277,8 @@ function scheduleResize() {
     if (!els.hud) return;
     // 设置还没到时先用主进程按 hudFields 估的高度，避免先按默认布局撑大再缩回
     if (!settings) return;
+    // 气泡形态窗口尺寸由主进程管，内容高度不参与
+    if (dockState.docked && !dockState.expanded) return;
     // hud 的高度是 auto，量出来的就是内容高度；窗口比内容小也不会影响布局
     const height = Math.ceil(els.hud.getBoundingClientRect().height);
     if (Math.abs(height - lastHeight) < 1) return;
@@ -285,7 +307,12 @@ function drawSpark(spark) {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, width, height);
 
-  ctx.strokeStyle = "rgba(255,255,255,0.07)";
+  // 曲线配色随主题：浅底用更深的绿与深色网格线，保证对比度
+  const light = document.documentElement.dataset.theme === "light";
+  const lineColor = light ? "#0b8a68" : "#10a37f";
+  const fillTop = light ? "rgba(11,138,104,0.20)" : "rgba(16,163,127,0.30)";
+
+  ctx.strokeStyle = light ? "rgba(15,23,42,0.10)" : "rgba(255,255,255,0.07)";
   ctx.lineWidth = 1;
   ctx.beginPath();
   ctx.moveTo(0, height - 0.5);
@@ -300,8 +327,8 @@ function drawSpark(spark) {
   const yOf = (value) => height - 1 - (value / max) * (height - 3);
 
   const gradient = ctx.createLinearGradient(0, 0, 0, height);
-  gradient.addColorStop(0, "rgba(16,163,127,0.30)");
-  gradient.addColorStop(1, "rgba(16,163,127,0)");
+  gradient.addColorStop(0, fillTop);
+  gradient.addColorStop(1, light ? "rgba(11,138,104,0)" : "rgba(16,163,127,0)");
 
   ctx.beginPath();
   ctx.moveTo(0, height);
@@ -318,7 +345,7 @@ function drawSpark(spark) {
     if (index === 0) ctx.moveTo(x, y);
     else ctx.lineTo(x, y);
   });
-  ctx.strokeStyle = "#10a37f";
+  ctx.strokeStyle = lineColor;
   ctx.lineWidth = 1.6;
   ctx.lineJoin = "round";
   ctx.lineCap = "round";
@@ -331,15 +358,56 @@ function drawSpark(spark) {
 function applySettings(next) {
   const fieldsChanged =
     JSON.stringify(next?.hudFields ?? null) !== JSON.stringify(settings?.hudFields ?? null);
+  const themeChanged = (next?.theme ?? "dark") !== (settings?.theme ?? "dark");
   settings = next;
+  document.documentElement.dataset.theme = next?.theme === "light" ? "light" : "dark";
   document.body.classList.toggle("through", Boolean(next?.clickThrough));
   if (fieldsChanged) lastStatKey = null; // 字段变了要重建统计格
+  if (themeChanged) drawSpark(); // 主题切换立即重绘曲线配色
+}
+
+/** 重放 CSS 动画：移除类 → 强制回流 → 加类，确保每次过渡都重新播放。 */
+function restartAnimation(el, className) {
+  el.classList.remove("slide-in", "slide-out");
+  void el.offsetWidth;
+  el.classList.add(className);
+}
+
+/**
+ * 吸附形态切换：收起=只显示气泡；展开=完整卡片。几何由主进程负责，
+ * 这里按吸附边播放滑入/滑出动画（透明窗口裁切卡片，视觉上即从屏幕边缘弹出）。
+ */
+function applyDockState(next) {
+  if (!next) return;
+  const prevExpanded = dockState.docked && dockState.expanded;
+  dockState = { ...dockState, ...next };
+  const collapsed = dockState.docked && !dockState.expanded;
+  const expanded = dockState.docked && dockState.expanded;
+
+  document.body.classList.toggle("docked", collapsed);
+  document.body.classList.toggle("dock-expanded", expanded);
+  for (const edge of ["left", "right", "top", "bottom"]) {
+    document.body.classList.toggle(`edge-${edge}`, dockState.edge === edge);
+  }
+  if (els.bubble) els.bubble.hidden = !collapsed;
+
+  if (els.hud) {
+    if (collapsed) {
+      els.hud.classList.remove("slide-in", "slide-out");
+    } else if (next.animating === "collapse") {
+      restartAnimation(els.hud, "slide-out");
+    } else if (!prevExpanded || next.animating === "expand") {
+      restartAnimation(els.hud, "slide-in");
+    }
+  }
+  if (!collapsed) scheduleResize();
 }
 
 function applyState(payload) {
   if (!payload) return;
   snapshot = payload.snapshot ?? snapshot;
   if (payload.settings) applySettings(payload.settings);
+  if (payload.dock) applyDockState(payload.dock);
   render();
 }
 
@@ -354,13 +422,26 @@ function bindUi() {
     api?.showContextMenu();
   });
 
-  window.addEventListener("dblclick", () => api?.openDashboard());
+  window.addEventListener("dblclick", (event) => {
+    // 气泡上的双击不打开仪表盘，避免和「点击固定」互相打架
+    if (event.target?.closest?.("#bubble")) return;
+    api?.openDashboard();
+  });
 
   window.addEventListener("keydown", (event) => {
     if (event.key === "Escape") api?.hideHud();
   });
 
   window.addEventListener("resize", () => decodeSparkAfterResize());
+
+  // 悬停展开/收回由主进程光标轮询驱动：气泡与卡片都是原生拖动区，
+  // 渲染器的 mouseenter/mouseleave 在拖动区上不可靠，故不在此监听。
+
+  // 点击气泡：固定展开，鼠标移开也不收回
+  els.bubble?.addEventListener("click", (event) => {
+    event.stopPropagation();
+    api?.toggleBubblePin?.();
+  });
 }
 
 function decodeSparkAfterResize() {
@@ -388,6 +469,7 @@ async function init() {
     applySettings(next);
     render();
   });
+  api.onDockState(applyDockState);
 }
 
 init();

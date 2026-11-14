@@ -16,6 +16,12 @@ export const HUD_FIELDS = Object.freeze([
 
 const DEFAULT_HUD_FIELDS = Object.freeze(["tps", "ttft", "mspt", "latency", "turn", "spark"]);
 
+// 边缘吸附可选的四条边
+export const DOCK_EDGES = Object.freeze(["left", "right", "top", "bottom"]);
+
+// 外观主题：深色（默认）/ 浅色
+export const THEMES = Object.freeze(["dark", "light"]);
+
 export const DEFAULTS = Object.freeze({
   opacity: 0.94,
   scale: 1,
@@ -28,7 +34,31 @@ export const DEFAULTS = Object.freeze({
   hideDock: false,
   refreshMs: 1000,
   hudFields: DEFAULT_HUD_FIELDS,
+  edgeSnap: true,
+  hudDock: null,
+  theme: "dark",
 });
+
+/** 规范化主题：只接受 dark/light，写坏或缺失时回落深色。 */
+export function normalizeTheme(value) {
+  return THEMES.includes(value) ? value : "dark";
+}
+
+/**
+ * 规范化边缘吸附状态：{ edge, anchor, displayId }。
+ * anchor 是气泡沿吸附边的坐标（左右边为 y，上下边为 x），displayId 用于多显示器恢复。
+ * 写坏或缺失时回落到 null（未吸附），不能让悬浮窗卡在找不到的位置。
+ */
+export function normalizeHudDock(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  if (!DOCK_EDGES.includes(value.edge)) return null;
+  if (!Number.isFinite(value.anchor)) return null;
+  return {
+    edge: value.edge,
+    anchor: Math.round(value.anchor),
+    displayId: Number.isFinite(value.displayId) ? value.displayId : null,
+  };
+}
 
 /**
  * 规范化显示字段：丢掉未知项、去重、按 HUD_FIELDS 的固定顺序排列。
@@ -62,6 +92,9 @@ export class SettingsStore {
       if (raw && typeof raw === "object" && !Array.isArray(raw)) {
         this.data = { ...DEFAULTS, ...raw };
         this.data.hudFields = normalizeHudFields(this.data.hudFields);
+        this.data.edgeSnap = Boolean(this.data.edgeSnap);
+        this.data.hudDock = normalizeHudDock(this.data.hudDock);
+        this.data.theme = normalizeTheme(this.data.theme);
       }
     } catch {
       /* 首次启动或文件损坏：使用默认值 */
@@ -86,7 +119,10 @@ export class SettingsStore {
     next.clickThrough = Boolean(next.clickThrough);
     next.startAtLogin = Boolean(next.startAtLogin);
     next.hideDock = Boolean(next.hideDock);
+    next.edgeSnap = Boolean(next.edgeSnap);
     next.hudFields = normalizeHudFields(next.hudFields);
+    next.hudDock = normalizeHudDock(next.hudDock);
+    next.theme = normalizeTheme(next.theme);
     if (next.pinnedFile !== null && typeof next.pinnedFile !== "string") next.pinnedFile = null;
     if (next.codexHome !== null && typeof next.codexHome !== "string") next.codexHome = null;
     if (next.hudPosition !== null) {

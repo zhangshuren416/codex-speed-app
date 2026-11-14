@@ -8,8 +8,40 @@
   --dim2: #6b7484;
   --accent: #10a37f;
   --warn: #e8b34b;
+  /* 语义色：按钮/徽章淡底/表格行线/悬停，浅色主题统一覆盖 */
+  --btn-bg: #1a1f29;
+  --btn-bg-hover: #202633;
+  --btn-border-hover: #36404f;
+  --chip-bg: rgba(255, 255, 255, 0.06);
+  --accent-soft: rgba(16, 163, 127, 0.14);
+  --warn-soft: rgba(232, 179, 75, 0.14);
+  --row-border: rgba(38, 44, 56, 0.6);
+  --row-hover: rgba(255, 255, 255, 0.025);
+  --tag-dim-bg: rgba(255, 255, 255, 0.05);
   --font-ui: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", "PingFang SC", sans-serif;
   --font-mono: "Cascadia Mono", Consolas, "SF Mono", ui-monospace, monospace;
+}
+
+/* 浅色主题：近白页面 + 纯白面板 + 近黑文字，干净清晰（不再灰蒙） */
+:root[data-theme="light"] {
+  --bg: #f5f7fa;
+  --panel: #ffffff;
+  --panel-2: #f7f9fb;
+  --border: #d9dfe8;
+  --text: #101216;
+  --dim: #47505e;
+  --dim2: #67707e;
+  --accent: #0b8a68;
+  --warn: #a86f12;
+  --btn-bg: #ffffff;
+  --btn-bg-hover: #f0f3f7;
+  --btn-border-hover: #b9c2cf;
+  --chip-bg: rgba(15, 23, 42, 0.06);
+  --accent-soft: rgba(11, 138, 104, 0.13);
+  --warn-soft: rgba(168, 111, 18, 0.15);
+  --row-border: rgba(15, 23, 42, 0.08);
+  --row-hover: rgba(15, 23, 42, 0.035);
+  --tag-dim-bg: rgba(15, 23, 42, 0.05);
 }
 
 * {
@@ -61,7 +93,7 @@ h1 {
   padding: 6px 11px;
   border: 1px solid var(--border);
   border-radius: 7px;
-  background: #1a1f29;
+  background: var(--btn-bg);
   color: var(--text);
   font: inherit;
   font-size: 12px;
@@ -69,8 +101,8 @@ h1 {
 }
 
 .btn:hover {
-  border-color: #36404f;
-  background: #202633;
+  border-color: var(--btn-border-hover);
+  background: var(--btn-bg-hover);
 }
 
 .btn:disabled {
@@ -132,18 +164,18 @@ h1 {
   display: inline-block;
   padding: 3px 7px;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--chip-bg);
   color: var(--dim);
 }
 
 .pill.accent {
   color: var(--accent);
-  background: rgba(16, 163, 127, 0.14);
+  background: var(--accent-soft);
 }
 
 .pill.warn {
   color: var(--warn);
-  background: rgba(232, 179, 75, 0.14);
+  background: var(--warn-soft);
 }
 
 .panel {
@@ -193,7 +225,7 @@ table {
 th,
 td {
   padding: 9px 16px;
-  border-bottom: 1px solid rgba(38, 44, 56, 0.6);
+  border-bottom: 1px solid var(--row-border);
   text-align: left;
   white-space: nowrap;
 }
@@ -209,7 +241,7 @@ tbody tr:last-child td {
 }
 
 tbody tr:hover {
-  background: rgba(255, 255, 255, 0.025);
+  background: var(--row-hover);
 }
 
 .num {
@@ -235,13 +267,13 @@ tbody tr:hover {
   display: inline-block;
   padding: 2px 6px;
   border-radius: 5px;
-  background: rgba(16, 163, 127, 0.12);
+  background: var(--accent-soft);
   color: var(--accent);
   font-size: 10px;
 }
 
 .tag.dim {
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--tag-dim-bg);
   color: var(--dim);
 }
 
@@ -336,6 +368,23 @@ tbody tr:hover {
   color: var(--dim2);
   font-size: 11px;
   line-height: 1.6;
+}
+
+/* 滚动条用主题配色，而非浏览器默认灰 */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 6px;
+  border: 2px solid var(--bg);
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--dim2);
 }
 
 @media (max-width: 880px) {

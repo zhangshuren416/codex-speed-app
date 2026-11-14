@@ -13,6 +13,7 @@ import {
   ipcMain,
   screen,
   nativeImage,
+  nativeTheme,
   globalShortcut,
   shell,
   dialog,
@@ -24,6 +25,13 @@ import { fileURLToPath } from "node:url";
 import { SettingsStore } from "./settings.mjs";
 import { Monitor } from "./engine/monitor.mjs";
 import { resolveCodexHome } from "./engine/paths.mjs";
+import {
+  BUBBLE_SIZE_CSS,
+  clampAlong,
+  bubbleBounds as computeBubbleBounds,
+  expandedBounds as computeExpandedBounds,
+  snapTargetFor as computeSnapTarget,
+} from "./dock.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "../..");
@@ -69,6 +77,14 @@ const HUD_WIDTH = 300;
 const HUD_MIN_HEIGHT = 60;
 const HUD_MAX_HEIGHT = 460;
 
+// 边缘吸附：拖到工作区边缘附近松手 → 收成一个贴边小气泡；悬停展开，移开收回
+// 纯几何（气泡/展开 bounds、选边）在 dock.mjs，可单测；这里只保留时序常量
+const COLLAPSE_DELAY_MS = 350; // 鼠标离开后延迟收回，避免掠过边缘时抖动
+const MOVE_GUARD_MS = 250; // 程序化移窗后这段时间内的 moved 事件不触发吸附判定
+const HOVER_POLL_MS = 80; // 光标轮询间隔：气泡是原生拖动区，不派发 mouseenter，靠主进程判悬停
+const EXPAND_ANIM_MS = 240; // 展开滑入动画时长（与 hud.css 一致）
+const COLLAPSE_ANIM_MS = 200; // 收回滑出动画时长（略大于 CSS 的 180ms，确保动画演完再缩窗）
+
 // 悬浮窗“显示内容”菜单：key 与 settings.mjs 的 HUD_FIELDS 对应
 const HUD_FIELD_LABELS = [
   ["tps", "当前速度"],
@@ -92,6 +108,19 @@ let quitting = false;
 let moveTimer = null;
 // 当前 HUD 的内容高度（CSS 像素）。缩放时再乘以 scale 得到窗口 DIP 尺寸。
 let hudHeightCss = 196;
+
+// 边缘吸附状态：dock = { edge, anchor, displayId }，anchor 是气泡沿吸附边的坐标
+let dock = null;
+let dockExpanded = false; // 吸附中但悬停/固定展开成完整 HUD
+let dockPinned = false; // 点击气泡固定展开：鼠标移开也不收回
+let dragging = false; // 原生拖动进行中（move → moved 之间）
+let menuOpen = false; // 右键菜单打开时不收回，避免菜单还在窗口先缩了
+let programmaticMoveUntil = 0; // 程序化移窗的保护期，防止 moved 事件回环触发吸附
+let dockAnimating = null; // null | "expand" | "collapse"，驱动渲染器滑入/滑出动画
+let outsideSince = null; // 展开后鼠标移出窗口的起始时刻，用于延迟收回
+let hoverPollTimer = null; // 光标轮询定时器
+let expandAnimTimer = null;
+let collapseAnimTimer = null;
 
 /* ------------------------------------------------------------------ *
  * 日志
@@ -188,6 +217,7 @@ async function boot() {
   }
 
   installAppMenu();
+  applyTheme();
   installIpc();
   installSecurityGuards();
   createTray();
@@ -195,6 +225,25 @@ async function boot() {
   startEngine();
   registerShortcuts();
   applyLoginItem();
+
+  // 分辨率/任务栏变化：吸附中的窗口重新贴边，普通窗口夹回屏幕
+  screen.on("display-metrics-changed", () => {
+    if (!hudWin || hudWin.isDestroyed()) return;
+    if (dock) {
+      const area = dockWorkArea();
+      setHudBounds(
+        dockExpanded
+          ? expandedBounds(area, dock.edge, dock.anchor)
+          : bubbleBounds(area, dock.edge, dock.anchor)
+      );
+    } else {
+      keepHudOnScreen();
+    }
+  });
+
+  // 悬停判定轮询：气泡/卡片是原生拖动区，渲染器鼠标事件不可靠，由主进程按光标位置驱动
+  hoverPollTimer = setInterval(pollDockHover, HOVER_POLL_MS);
+  hoverPollTimer.unref?.();
 
   if (process.env.CODEX_SPEED_DEBUG === "1") {
     setTimeout(() => showDashboard(), 1200);
@@ -286,15 +335,22 @@ function hudPixelSize() {
 
 function createHud() {
   if (hudWin) return;
+  // 上次退出时吸在边缘的话，启动直接以气泡形态恢复
+  dock = restoreDock();
+  dockExpanded = false;
+  dockPinned = false;
   const position = restorePosition();
   const scale = settings.get("scale");
   const size = hudPixelSize();
+  const initial = dock
+    ? bubbleBounds(dockWorkArea(), dock.edge, dock.anchor)
+    : { x: position.x, y: position.y, width: size.width, height: size.height };
 
   hudWin = new BrowserWindow({
-    width: size.width,
-    height: size.height,
-    x: position.x,
-    y: position.y,
+    width: initial.width,
+    height: initial.height,
+    x: initial.x,
+    y: initial.y,
     frame: false,
     transparent: true,
     backgroundColor: "#00000000",
@@ -340,6 +396,69 @@ function createHud() {
         }))()`)
         .then((info) => log("HUD 自检", JSON.stringify(info)))
         .catch((err) => log("HUD 自检失败", err?.message ?? String(err)));
+      // 吸附自检：模拟 吸附→固定展开→收回→解除，验证状态机、几何与动画类
+      setTimeout(async () => {
+        if (!hudWin || hudWin.isDestroyed()) return;
+        const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+        const probe = () =>
+          hudWin.webContents
+            .executeJavaScript(
+              `({ body: document.body.className, hud: document.getElementById("hud")?.className, bubbleHidden: document.getElementById("bubble")?.hidden })`
+            )
+            .catch(() => null);
+        try {
+          dockToEdge("right", 200);
+          await sleep(60);
+          const bubble = hudWin.getBounds();
+          const sDock = dockStatePayload();
+          const pBubble = await probe();
+          expandFromBubble({ pin: true });
+          await sleep(EXPAND_ANIM_MS + 40);
+          const expanded = hudWin.getBounds();
+          const sPin = dockStatePayload();
+          const pExpanded = await probe();
+          collapseToBubble();
+          await sleep(COLLAPSE_ANIM_MS + 60);
+          const collapsed = hudWin.getBounds();
+          const sCollapse = dockStatePayload();
+          const pCollapsed = await probe();
+          undock();
+          await sleep(60);
+          const free = hudWin.getBounds();
+          const sFree = dockStatePayload();
+          log(
+            "吸附自检",
+            JSON.stringify({ bubble, sDock, pBubble, expanded, sPin, pExpanded, collapsed, sCollapse, pCollapsed, free, sFree })
+          );
+        } catch (err) {
+          log("吸附自检失败", err?.message ?? String(err));
+        }
+      }, 1500);
+      // 主题自检：探测当前配色 → 切到相反主题 → 探测 → 切回，验证实时切换
+      setTimeout(async () => {
+        if (!hudWin || hudWin.isDestroyed()) return;
+        const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+        const probe = () =>
+          hudWin.webContents
+            .executeJavaScript(
+              `({ theme: document.documentElement.dataset.theme, hudBg: getComputedStyle(document.getElementById("hud")).backgroundImage, text: getComputedStyle(document.getElementById("hud")).color })`
+            )
+            .catch(() => null);
+        try {
+          const start = settings.get("theme");
+          const other = start === "light" ? "dark" : "light";
+          const before = await probe();
+          updateSettings({ theme: other });
+          await sleep(200);
+          const switched = await probe();
+          updateSettings({ theme: start });
+          await sleep(200);
+          const restored = await probe();
+          log("主题自检", JSON.stringify({ start, before, switched, restored }));
+        } catch (err) {
+          log("主题自检失败", err?.message ?? String(err));
+        }
+      }, 3000);
     }
   });
 
@@ -357,12 +476,51 @@ function createHud() {
   hudWin.on("show", refreshTrayMenu);
   hudWin.on("hide", refreshTrayMenu);
 
-  // 记住位置（多显示器）
+  // 拖动：move 期间标记 dragging；moved（松手）时做吸附判定并记住位置。
+  // 注意：Windows 下程序化 setBounds 只发 move 不发 moved，保护期内的 move 不能置
+  // dragging，否则标志会永久卡真，导致悬停轮询被一直跳过。
+  hudWin.on("move", () => {
+    if (Date.now() >= programmaticMoveUntil) dragging = true;
+  });
   hudWin.on("moved", () => {
-    if (!hudWin) return;
+    if (!hudWin || hudWin.isDestroyed()) return;
+    dragging = false;
+    // 程序化移窗（收起/展开/恢复）也会触发 moved，保护期内不做吸附判定
+    if (Date.now() < programmaticMoveUntil) {
+      // 但用户可能刚拖完气泡就松手：只同步 anchor（不移窗，无回环风险），
+      // 避免下次展开时跳回旧位置
+      if (dock && !dockExpanded) {
+        const b = hudWin.getBounds();
+        const vertical = dock.edge === "left" || dock.edge === "right";
+        const center = vertical ? b.y + b.height / 2 : b.x + b.width / 2;
+        const anchor = Math.round(center - bubbleSide() / 2);
+        if (anchor !== dock.anchor) {
+          dock.anchor = anchor;
+          persistDock();
+        }
+      }
+      return;
+    }
+    const bounds = hudWin.getBounds();
+    const area = screen.getDisplayNearestPoint({
+      x: bounds.x + Math.round(bounds.width / 2),
+      y: bounds.y + Math.round(bounds.height / 2),
+    }).workArea;
+    const target = settings.get("edgeSnap") ? snapTargetFor(bounds, area) : null;
+    if (target) {
+      // 拖到边缘：吸附并收成气泡（沿边拖气泡也走这里，更新 anchor）
+      dockToEdge(target.edge, target.anchor);
+      return;
+    }
+    if (dock) {
+      // 从边缘拖走：解除吸附，恢复完整窗口
+      undock();
+      return;
+    }
+    // 普通拖动：记住位置（多显示器）
     if (moveTimer) clearTimeout(moveTimer);
     moveTimer = setTimeout(() => {
-      if (!hudWin) return;
+      if (!hudWin || hudWin.isDestroyed()) return;
       const [x, y] = hudWin.getPosition();
       settings.set({ hudPosition: { x, y } });
     }, 300);
@@ -393,15 +551,246 @@ function restorePosition() {
   return { x: area.x + area.width - w - 24, y: area.y + 24 };
 }
 
+/* ------------------------------------------------------------------ *
+ * 边缘吸附：拖近边缘收成气泡，悬停展开、点击固定、拖走解除
+ * ------------------------------------------------------------------ */
+function bubbleSide() {
+  return Math.round(BUBBLE_SIZE_CSS * settings.get("scale"));
+}
+
+function hudDisplay() {
+  const [x, y] = hudWin.getPosition();
+  const [w, h] = hudWin.getSize();
+  return screen.getDisplayNearestPoint({
+    x: x + Math.round(w / 2),
+    y: y + Math.round(h / 2),
+  });
+}
+
+/** 吸附所在显示器的工作区；记录的显示器拔掉后回落到窗口当前所在屏。 */
+function dockWorkArea() {
+  const found = screen.getAllDisplays().find((d) => d.id === dock?.displayId);
+  if (found) return found.workArea;
+  if (hudWin && !hudWin.isDestroyed()) return hudDisplay().workArea;
+  return screen.getPrimaryDisplay().workArea;
+}
+
+// 以下两个是 dock.mjs 纯函数的薄封装：只补充当前缩放下的像素尺寸
+function bubbleBounds(area, edge, anchor) {
+  return computeBubbleBounds(area, edge, anchor, bubbleSide());
+}
+
+function expandedBounds(area, edge, anchor) {
+  const { width, height } = hudPixelSize();
+  return computeExpandedBounds(area, edge, anchor, width, height, bubbleSide());
+}
+
+/** 程序化移窗：带保护期，避免 setBounds 触发的 moved 又被当成用户拖拽。 */
+function setHudBounds(bounds) {
+  if (!hudWin || hudWin.isDestroyed()) return;
+  programmaticMoveUntil = Date.now() + MOVE_GUARD_MS;
+  dragging = false; // 程序化移窗不是用户拖动，确保拖动标志不会卡住
+  hudWin.setBounds(bounds);
+}
+
+function dockStatePayload() {
+  return {
+    docked: Boolean(dock),
+    expanded: dockExpanded,
+    pinned: dockPinned,
+    edge: dock?.edge ?? null,
+    animating: dockAnimating,
+  };
+}
+
+function sendDockState() {
+  if (hudWin && !hudWin.isDestroyed()) {
+    hudWin.webContents.send("hud:dock-state", dockStatePayload());
+  }
+}
+
+function persistDock() {
+  settings.set({
+    hudDock: dock ? { edge: dock.edge, anchor: dock.anchor, displayId: dock.displayId } : null,
+  });
+}
+
+function clearAnimTimers() {
+  if (expandAnimTimer) clearTimeout(expandAnimTimer);
+  if (collapseAnimTimer) clearTimeout(collapseAnimTimer);
+  expandAnimTimer = null;
+  collapseAnimTimer = null;
+}
+
+/** 展开：窗口立即放到完整尺寸，渲染器播放从边缘滑入的弹出动画。 */
+function expandFromBubble({ pin = false } = {}) {
+  if (!dock || !hudWin || hudWin.isDestroyed()) return;
+  clearAnimTimers();
+  dockExpanded = true;
+  if (pin) dockPinned = true;
+  dockAnimating = "expand";
+  outsideSince = null;
+  setHudBounds(expandedBounds(dockWorkArea(), dock.edge, dock.anchor));
+  sendDockState();
+  // 动画演完清掉标记，避免后续状态推送（如打开仪表盘）误触发再次滑入
+  expandAnimTimer = setTimeout(() => {
+    dockAnimating = null;
+    expandAnimTimer = null;
+  }, EXPAND_ANIM_MS);
+  expandAnimTimer.unref?.();
+}
+
+/** 收回：先让渲染器把卡片滑向边缘淡出，动画演完再真正缩成气泡（两阶段）。 */
+function collapseToBubble() {
+  if (!dock || !hudWin || hudWin.isDestroyed()) return;
+  if (!dockExpanded) {
+    finishCollapse();
+    return;
+  }
+  if (dockAnimating === "collapse") return; // 已在收回动画中
+  clearAnimTimers();
+  dockAnimating = "collapse";
+  outsideSince = null;
+  sendDockState(); // expanded 仍为 true，窗口保持完整尺寸供滑出动画
+  collapseAnimTimer = setTimeout(finishCollapse, COLLAPSE_ANIM_MS);
+  collapseAnimTimer.unref?.();
+}
+
+function finishCollapse() {
+  clearAnimTimers();
+  dockExpanded = false;
+  dockPinned = false;
+  dockAnimating = null;
+  if (!dock || !hudWin || hudWin.isDestroyed()) return;
+  setHudBounds(bubbleBounds(dockWorkArea(), dock.edge, dock.anchor));
+  sendDockState();
+}
+
+/**
+ * 光标轮询判定悬停：气泡与卡片都是原生拖动区，渲染器收不到可靠的 mouseenter/mouseleave，
+ * 因此由主进程按「光标 vs 窗口 bounds」驱动展开/收回，彻底绕开拖动区事件问题。
+ */
+function pollDockHover() {
+  if (!dock || !hudWin || hudWin.isDestroyed() || !hudWin.isVisible()) return;
+  if (dragging || menuOpen) return;
+  const cursor = screen.getCursorScreenPoint();
+  const b = hudWin.getBounds();
+  const inside =
+    cursor.x >= b.x && cursor.x < b.x + b.width && cursor.y >= b.y && cursor.y < b.y + b.height;
+
+  if (!dockExpanded) {
+    if (inside) {
+      // 气泡：光标进入即弹出
+      if (process.env.CODEX_SPEED_DEBUG === "1") log("悬停展开", JSON.stringify(hudWin.getBounds()));
+      expandFromBubble();
+    }
+    return;
+  }
+  if (dockPinned) {
+    outsideSince = null;
+    return;
+  }
+  if (inside) {
+    outsideSince = null;
+    if (dockAnimating === "collapse") expandFromBubble(); // 收回动画中鼠标回来 → 反向滑入
+    return;
+  }
+  if (dockAnimating === "collapse") return; // 正在滑出，让它演完
+  if (outsideSince === null) outsideSince = Date.now();
+  else if (Date.now() - outsideSince >= COLLAPSE_DELAY_MS) {
+    if (process.env.CODEX_SPEED_DEBUG === "1") log("悬停收回", JSON.stringify(hudWin.getBounds()));
+    collapseToBubble();
+  }
+}
+
+function snapTargetFor(bounds, area) {
+  return computeSnapTarget(bounds, area, bubbleSide());
+}
+
+function dockToEdge(edge, anchor) {
+  clearAnimTimers();
+  dock = { edge, anchor, displayId: hudDisplay().id };
+  dockExpanded = false;
+  dockPinned = false;
+  dockAnimating = null;
+  outsideSince = null;
+  persistDock();
+  setHudBounds(bubbleBounds(dockWorkArea(), edge, anchor));
+  sendDockState();
+}
+
+/** 解除吸附：展开状态原地恢复；气泡状态以气泡为中心展开成完整窗口并夹回屏幕。 */
+function undock() {
+  if (!dock) return;
+  const wasExpanded = dockExpanded;
+  const prev = dock;
+  dock = null;
+  dockExpanded = false;
+  dockPinned = false;
+  dockAnimating = null;
+  outsideSince = null;
+  clearAnimTimers();
+  persistDock();
+  if (!hudWin || hudWin.isDestroyed()) return;
+  const area = hudDisplay().workArea;
+  const { width: w, height: h } = hudPixelSize();
+  let x;
+  let y;
+  if (wasExpanded) {
+    [x, y] = hudWin.getPosition();
+  } else {
+    const b = bubbleBounds(area, prev.edge, prev.anchor);
+    const side = bubbleSide();
+    x = clampAlong(b.x + side / 2 - w / 2, area.x, area.x + area.width - w);
+    y = clampAlong(b.y + side / 2 - h / 2, area.y, area.y + area.height - h);
+  }
+  setHudBounds({ x, y, width: w, height: h });
+  settings.set({ hudPosition: { x, y } });
+  sendDockState();
+}
+
+/** 启动时恢复吸附：显示器可能变了，anchor 夹回当前工作区。 */
+function restoreDock() {
+  const saved = settings.get("hudDock");
+  if (!saved) return null;
+  const display =
+    screen.getAllDisplays().find((d) => d.id === saved.displayId) ?? screen.getPrimaryDisplay();
+  const area = display.workArea;
+  const side = Math.round(BUBBLE_SIZE_CSS * settings.get("scale"));
+  const vertical = saved.edge === "left" || saved.edge === "right";
+  const min = vertical ? area.y : area.x;
+  const max = (vertical ? area.y + area.height : area.x + area.width) - side;
+  return {
+    edge: saved.edge,
+    anchor: clampAlong(saved.anchor, min, max),
+    displayId: display.id,
+  };
+}
+
 function applyAppearance() {
   if (!hudWin || hudWin.isDestroyed()) return;
   const scale = settings.get("scale");
-  const size = hudPixelSize();
-  hudWin.setContentSize(size.width, size.height);
   hudWin.webContents.setZoomFactor(scale);
-  hudWin.setOpacity(settings.get("opacity"));
+  if (dock) {
+    // 吸附中：按气泡/展开几何重排（缩放变化时气泡与窗口同步缩放）
+    const area = dockWorkArea();
+    const bounds = dockExpanded
+      ? expandedBounds(area, dock.edge, dock.anchor)
+      : bubbleBounds(area, dock.edge, dock.anchor);
+    setHudBounds(bounds);
+  } else {
+    const size = hudPixelSize();
+    hudWin.setContentSize(size.width, size.height);
+  }
+  applyHudOpacity();
   applyAlwaysOnTop();
   applyClickThrough();
+}
+
+/** HUD 不透明度：浅色强制 1——半透明白卡叠在任何非白背景上都会混成灰（灰蒙根源）；深色按用户设置。 */
+function applyHudOpacity() {
+  if (!hudWin || hudWin.isDestroyed()) return;
+  hudWin.setOpacity(settings.get("theme") === "light" ? 1 : settings.get("opacity"));
 }
 
 /** 变高/变矮后别让窗口滑出屏幕（至少留 80px 宽、40px 高可见）。 */
@@ -427,9 +816,14 @@ function applyHudContentHeight(cssHeight) {
   if (Math.abs(next - hudHeightCss) < 1) return hudHeightCss;
   hudHeightCss = next;
   if (hudWin && !hudWin.isDestroyed()) {
-    const size = hudPixelSize();
-    hudWin.setContentSize(size.width, size.height);
-    keepHudOnScreen();
+    if (dock) {
+      // 收起状态窗口保持气泡尺寸，只记录内容高度；展开状态按新高度重新贴边
+      if (dockExpanded) setHudBounds(expandedBounds(dockWorkArea(), dock.edge, dock.anchor));
+    } else {
+      const size = hudPixelSize();
+      hudWin.setContentSize(size.width, size.height);
+      keepHudOnScreen();
+    }
   }
   return hudHeightCss;
 }
@@ -448,11 +842,32 @@ function applyClickThrough() {
   hudWin.setIgnoreMouseEvents(on, { forward: true });
 }
 
+/** 主题：原生菜单/对话框跟随深浅色；仪表盘窗口底色同步，避免浅色下黑底闪烁。 */
+function applyTheme() {
+  const light = settings.get("theme") === "light";
+  nativeTheme.themeSource = light ? "light" : "dark";
+  if (dashboardWin && !dashboardWin.isDestroyed()) {
+    dashboardWin.setBackgroundColor(light ? "#f5f7fa" : "#0f1115");
+  }
+  applyHudOpacity(); // 切到浅色立即变不透明，切回深色恢复用户不透明度
+}
+
+/** 「主题」子菜单：托盘与悬浮窗右键菜单共用。 */
+function themeSubmenu() {
+  const light = settings.get("theme") === "light";
+  return [
+    { label: "深色", type: "radio", checked: !light, click: () => updateSettings({ theme: "dark" }) },
+    { label: "浅色", type: "radio", checked: light, click: () => updateSettings({ theme: "light" }) },
+  ];
+}
+
 function showHud() {
   if (!settings || !monitor) return;
   if (!hudWin) createHud();
   if (!hudWin) return;
   if (hudWin.isMinimized()) hudWin.restore();
+  // 吸附中被托盘/快捷键唤起：展开并固定，免得鼠标不在上面又缩回去
+  if (dock && !dockExpanded) expandFromBubble({ pin: true });
   hudWin.showInactive();
   hudWin.moveTop();
   refreshTrayMenu();
@@ -484,7 +899,7 @@ function showDashboard() {
     minWidth: 660,
     minHeight: 480,
     title: "Codex Speed",
-    backgroundColor: "#0f1115",
+    backgroundColor: settings.get("theme") === "light" ? "#f5f7fa" : "#0f1115",
     autoHideMenuBar: true,
     icon: path.join(ASSET_DIR, "app.png"),
     show: false,
@@ -580,6 +995,7 @@ function broadcastState() {
     platform: process.platform,
     version: app.getVersion(),
     codexHome: resolveCodexHome(settings.get("codexHome")),
+    dock: dockStatePayload(),
   };
   for (const win of [hudWin, dashboardWin]) {
     if (win && !win.isDestroyed()) win.webContents.send("state", payload);
@@ -607,6 +1023,8 @@ const SETTING_KEYS = new Set([
   "hideDock",
   "refreshMs",
   "hudFields",
+  "edgeSnap",
+  "theme",
 ]);
 
 function sanitizeSettingsPatch(patch) {
@@ -621,10 +1039,13 @@ function sanitizeSettingsPatch(patch) {
 function updateSettings(patch) {
   const before = settings.all();
   const next = settings.set(patch);
-  if (next.opacity !== before.opacity) hudWin?.setOpacity(next.opacity);
+  if (next.opacity !== before.opacity) applyHudOpacity();
   if (next.scale !== before.scale) applyAppearance();
   if (next.alwaysOnTop !== before.alwaysOnTop) applyAlwaysOnTop();
   if (next.clickThrough !== before.clickThrough) applyClickThrough();
+  if (next.theme !== before.theme) applyTheme();
+  // 关掉自动吸附时把已经吸在边缘的窗口放回来
+  if (next.edgeSnap !== before.edgeSnap && !next.edgeSnap && dock) undock();
   if (next.startAtLogin !== before.startAtLogin) applyLoginItem();
   if (next.codexHome !== before.codexHome) {
     // 换数据目录时旧的钉住路径可能属于另一个 Codex 主目录，直接解除
@@ -727,6 +1148,12 @@ function trayTemplate() {
       click: (item) => updateSettings({ clickThrough: item.checked }),
     },
     {
+      label: "边缘自动吸附",
+      type: "checkbox",
+      checked: s.edgeSnap,
+      click: (item) => updateSettings({ edgeSnap: item.checked }),
+    },
+    {
       label: "不透明度",
       submenu: [1, 0.9, 0.8, 0.6, 0.4].map((value) => ({
         label: opacityLabel(value),
@@ -744,6 +1171,7 @@ function trayTemplate() {
         click: () => updateSettings({ scale: value }),
       })),
     },
+    { label: "主题", submenu: themeSubmenu() },
     {
       label: "显示内容",
       submenu: hudFieldsSubmenu(),
@@ -802,6 +1230,12 @@ function hudContextMenu() {
       click: (item) => updateSettings({ clickThrough: item.checked }),
     },
     {
+      label: "边缘自动吸附",
+      type: "checkbox",
+      checked: s.edgeSnap,
+      click: (item) => updateSettings({ edgeSnap: item.checked }),
+    },
+    {
       label: "不透明度",
       submenu: [1, 0.9, 0.8, 0.6, 0.4].map((value) => ({
         label: opacityLabel(value),
@@ -819,6 +1253,7 @@ function hudContextMenu() {
         click: () => updateSettings({ scale: value }),
       })),
     },
+    { label: "主题", submenu: themeSubmenu() },
     {
       label: "显示内容",
       submenu: hudFieldsSubmenu(),
@@ -834,10 +1269,29 @@ function hudContextMenu() {
       enabled: Boolean(s.pinnedFile),
       click: () => pinSession(null),
     },
+    ...(dock
+      ? [
+          ...(dockExpanded ? [{ label: "收起为气泡", click: () => collapseToBubble() }] : []),
+          { label: "解除边缘吸附", click: () => undock() },
+        ]
+      : []),
     { type: "separator" },
     { label: "隐藏悬浮窗", click: () => hudWin?.hide() },
     { label: "退出", click: () => quitApp() },
   ]);
+  // 菜单打开期间不收回窗口；关闭后按鼠标位置决定是否补一次收回
+  menuOpen = true;
+  menu.once("menu-will-close", () => {
+    menuOpen = false;
+    if (!dock || !dockExpanded || dockPinned) return;
+    if (!hudWin || hudWin.isDestroyed()) return;
+    const cursor = screen.getCursorScreenPoint();
+    const b = hudWin.getBounds();
+    const inside =
+      cursor.x >= b.x && cursor.x < b.x + b.width && cursor.y >= b.y && cursor.y < b.y + b.height;
+    // 菜单关闭后重置收回计时，交给光标轮询按延迟判定
+    outsideSince = inside ? null : Date.now();
+  });
   menu.popup({ window: hudWin });
 }
 
@@ -878,6 +1332,7 @@ function installIpc() {
     version: app.getVersion(),
     codexHome: resolveCodexHome(settings.get("codexHome")),
     userData: app.getPath("userData"),
+    dock: dockStatePayload(),
   }));
 
   ipcMain.handle("settings:update", (_event, patch) => updateSettings(sanitizeSettingsPatch(patch)));
@@ -903,6 +1358,16 @@ function installIpc() {
 
   // HUD 内容高度随“显示内容”变化；由渲染进程测量后回报，主进程只负责改窗口尺寸
   ipcMain.handle("hud:resize", (_event, cssHeight) => applyHudContentHeight(cssHeight));
+
+  // 悬停展开/收回由主进程光标轮询驱动（pollDockHover），不再依赖渲染器鼠标事件。
+  // 点击气泡：固定展开，鼠标移开也不收回；已固定时再点则收起
+  ipcMain.handle("hud:bubble-pin", () => {
+    if (dock && hudWin && !hudWin.isDestroyed()) {
+      if (dockExpanded && dockPinned) collapseToBubble();
+      else expandFromBubble({ pin: true });
+    }
+    return dockStatePayload();
+  });
 
   ipcMain.handle("window:open-dashboard", () => {
     showDashboard();
@@ -985,6 +1450,8 @@ app.on("before-quit", () => {
 app.on("will-quit", () => {
   globalShortcut.unregisterAll();
   stopEngine();
+  if (hoverPollTimer) clearInterval(hoverPollTimer);
+  clearAnimTimers();
   settings?.save();
 });
 app.on("window-all-closed", () => {

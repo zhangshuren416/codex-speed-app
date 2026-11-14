@@ -11,7 +11,17 @@ import {
   HUD_FIELDS,
   SettingsStore,
   normalizeHudFields,
+  normalizeHudDock,
+  normalizeTheme,
 } from "../src/main/settings.mjs";
+import {
+  BUBBLE_SIZE_CSS,
+  SNAP_DISTANCE,
+  clampAlong,
+  bubbleBounds,
+  expandedBounds,
+  snapTargetFor,
+} from "../src/main/dock.mjs";
 import { makeHome, writeRollout, entry, responseLines } from "./helpers.mjs";
 
 const BASE = Date.parse("2026-11-01T00:00:01Z");
@@ -240,6 +250,126 @@ test("设置持久化：hudFields 能读回并保持规范顺序", () => {
     fs.writeFileSync(file, JSON.stringify({ hudFields: "broken" }));
     const fixed = new SettingsStore(file);
     assert.deepEqual(fixed.get("hudFields"), DEFAULTS.hudFields);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("边缘吸附状态：非法值回落到 null，anchor 取整", () => {
+  assert.equal(normalizeHudDock(null), null);
+  assert.equal(normalizeHudDock(undefined), null);
+  assert.equal(normalizeHudDock([]), null);
+  assert.equal(normalizeHudDock({ edge: "diagonal", anchor: 10 }), null);
+  assert.equal(normalizeHudDock({ edge: "right", anchor: "abc" }), null);
+  assert.deepEqual(normalizeHudDock({ edge: "right", anchor: 120.6, displayId: 7 }), {
+    edge: "right",
+    anchor: 121,
+    displayId: 7,
+  });
+  // 旧设置没有 displayId 也能恢复（回落到主屏）
+  assert.deepEqual(normalizeHudDock({ edge: "top", anchor: 40 }), {
+    edge: "top",
+    anchor: 40,
+    displayId: null,
+  });
+});
+
+test("设置持久化：edgeSnap 与 hudDock 能读回，损坏值不卡死窗口", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-speed-dock-"));
+  try {
+    const file = path.join(dir, "settings.json");
+    const store = new SettingsStore(file);
+    assert.equal(store.get("edgeSnap"), DEFAULTS.edgeSnap);
+    assert.equal(store.get("hudDock"), null);
+
+    store.set({ edgeSnap: false, hudDock: { edge: "left", anchor: 300.4, displayId: 2 } });
+    store.save();
+    const reloaded = new SettingsStore(file);
+    assert.equal(reloaded.get("edgeSnap"), false);
+    assert.deepEqual(reloaded.get("hudDock"), { edge: "left", anchor: 300, displayId: 2 });
+
+    // 写坏的吸附状态必须回落到未吸附，否则启动时窗口会落在算不出的位置
+    fs.writeFileSync(file, JSON.stringify({ hudDock: { edge: "right", anchor: "x" } }));
+    const fixed = new SettingsStore(file);
+    assert.equal(fixed.get("hudDock"), null);
+    assert.equal(fixed.get("edgeSnap"), true);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+/* ------------------------------------------------------------------ *
+ * 边缘吸附几何（dock.mjs 纯函数）
+ * ------------------------------------------------------------------ */
+const AREA = { x: 0, y: 0, width: 1920, height: 1040 };
+const SIDE = BUBBLE_SIZE_CSS; // 40
+const FULL = { width: 300, height: 200 };
+
+test("气泡 bounds：四边贴边，anchor 夹回工作区", () => {
+  assert.deepEqual(bubbleBounds(AREA, "right", 300, SIDE), { x: 1880, y: 300, width: 40, height: 40 });
+  assert.deepEqual(bubbleBounds(AREA, "left", 300, SIDE), { x: 0, y: 300, width: 40, height: 40 });
+  assert.deepEqual(bubbleBounds(AREA, "top", 500, SIDE), { x: 500, y: 0, width: 40, height: 40 });
+  assert.deepEqual(bubbleBounds(AREA, "bottom", 500, SIDE), { x: 500, y: 1000, width: 40, height: 40 });
+  // 越界 anchor 夹回，气泡不会跑出屏幕
+  assert.equal(bubbleBounds(AREA, "right", -100, SIDE).y, 0);
+  assert.equal(bubbleBounds(AREA, "right", 5000, SIDE).y, 1000);
+  assert.equal(bubbleBounds(AREA, "top", -5, SIDE).x, 0);
+  assert.equal(bubbleBounds(AREA, "bottom", 99999, SIDE).x, 1880);
+});
+
+test("展开 bounds：贴边且沿边以气泡为中心，角落夹回", () => {
+  assert.deepEqual(expandedBounds(AREA, "right", 300, FULL.width, FULL.height, SIDE), { x: 1620, y: 220, width: 300, height: 200 });
+  assert.deepEqual(expandedBounds(AREA, "left", 300, FULL.width, FULL.height, SIDE), { x: 0, y: 220, width: 300, height: 200 });
+  assert.deepEqual(expandedBounds(AREA, "top", 500, FULL.width, FULL.height, SIDE), { x: 370, y: 0, width: 300, height: 200 });
+  assert.deepEqual(expandedBounds(AREA, "bottom", 500, FULL.width, FULL.height, SIDE), { x: 370, y: 840, width: 300, height: 200 });
+  // 靠近角落时居中会越界，必须夹回工作区
+  assert.equal(expandedBounds(AREA, "right", 0, FULL.width, FULL.height, SIDE).y, 0);
+  assert.equal(expandedBounds(AREA, "right", 1000, FULL.width, FULL.height, SIDE).y, 840);
+  assert.equal(expandedBounds(AREA, "top", 0, FULL.width, FULL.height, SIDE).x, 0);
+  assert.equal(expandedBounds(AREA, "bottom", 1900, FULL.width, FULL.height, SIDE).x, 1620);
+});
+
+test("松手选边：阈值内最近边、中心不吸、越界与角落", () => {
+  // 距右边 10px → 吸右，anchor = 窗口沿边中心 - 气泡半边长
+  assert.deepEqual(snapTargetFor({ x: 1610, y: 300, width: 300, height: 200 }, AREA, SIDE), { edge: "right", anchor: 380 });
+  // 中心远离四边 → 不吸附
+  assert.equal(snapTargetFor({ x: 800, y: 400, width: 300, height: 200 }, AREA, SIDE), null);
+  // 拖出屏幕（负距离）→ 吸最近的边
+  assert.deepEqual(snapTargetFor({ x: -50, y: 300, width: 300, height: 200 }, AREA, SIDE), { edge: "left", anchor: 380 });
+  // 角落：左 5px 比上 8px 近 → 吸左
+  assert.deepEqual(snapTargetFor({ x: 5, y: 8, width: 300, height: 200 }, AREA, SIDE), { edge: "left", anchor: 88 });
+  // 阈值边界：24 吸、25 不吸
+  assert.equal(snapTargetFor({ x: SNAP_DISTANCE, y: 400, width: 300, height: 200 }, AREA, SIDE).edge, "left");
+  assert.equal(snapTargetFor({ x: SNAP_DISTANCE + 1, y: 400, width: 300, height: 200 }, AREA, SIDE), null);
+});
+
+test("clampAlong：取整并夹紧，min > max 也不产生 NaN", () => {
+  assert.equal(clampAlong(10.6, 0, 100), 11);
+  assert.equal(clampAlong(-5, 0, 100), 0);
+  assert.equal(clampAlong(200, 0, 100), 100);
+  assert.equal(clampAlong(50, 100, 0), 100);
+});
+
+test("主题：只接受 dark/light，写坏或缺失回落深色", () => {
+  assert.equal(normalizeTheme("light"), "light");
+  assert.equal(normalizeTheme("dark"), "dark");
+  assert.equal(normalizeTheme("blue"), "dark");
+  assert.equal(normalizeTheme(undefined), "dark");
+  assert.equal(normalizeTheme(null), "dark");
+  assert.equal(DEFAULTS.theme, "dark");
+});
+
+test("设置持久化：theme 能读回，损坏值回落深色", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-speed-theme-"));
+  try {
+    const file = path.join(dir, "settings.json");
+    const store = new SettingsStore(file);
+    assert.equal(store.get("theme"), "dark");
+    store.set({ theme: "light" });
+    store.save();
+    assert.equal(new SettingsStore(file).get("theme"), "light");
+    fs.writeFileSync(file, JSON.stringify({ theme: "neon" }));
+    assert.equal(new SettingsStore(file).get("theme"), "dark");
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
