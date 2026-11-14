@@ -1,0 +1,85 @@
+name: release
+
+# 打包发布流程：
+#   * 推送 v* tag：按 tag 代码构建并发布新 Release；
+#   * 手动运行（workflow_dispatch）：按所选分支（通常是 main）的最新代码构建，
+#     覆盖刷新指定 tag 的 Release 资产——用于「不改版本号刷新 release」。
+# 版本号必须与目标 tag 一致（package.json version ↔ v*），否则拒绝发布。
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "要刷新的 Release tag（如 v0.1.1），资产将被覆盖"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    # 目前仅支持 Windows（见 README）；需要时再往矩阵里加 macos/ubuntu
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - name: Build installers
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: npm run dist:win -- --publish never
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-windows
+          path: dist/*.exe
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-windows
+          path: dist
+      - name: Resolve release tag
+        id: tag
+        env:
+          EVENT: ${{ github.event_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            echo "tag=$INPUT_TAG" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=$REF_NAME" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Check version matches tag
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          version="v$(node -p "require('./package.json').version")"
+          if [ "$version" != "$TAG" ]; then
+            echo "::error::package.json 版本 $version 与目标 tag $TAG 不一致，拒绝发布"
+            exit 1
+          fi
+      - name: Create or refresh release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.tag.outputs.tag }}
+          REPO: ${{ github.repository }}
+        run: |
+          if gh release view "$TAG" -R "$REPO" >/dev/null 2>&1; then
+            echo "Release $TAG 已存在，覆盖刷新资产"
+          else
+            gh release create "$TAG" -R "$REPO" --title "$TAG" --generate-notes
+          fi
+          gh release upload "$TAG" dist/*.exe -R "$REPO" --clobber

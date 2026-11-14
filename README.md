@@ -42,6 +42,11 @@ npm run smoke  # 不开窗口，读本机日志并打印摘要
 npm run dist:win   # 安装包 + 便携版
 ```
 
+发布（GitHub Actions `release` 工作流）：
+
+- 推送 `v*` tag：自动测试、打包并发布新 Release
+- 不改版本号刷新：在 Actions 里手动运行 `release`，填入已有 tag（如 `v0.1.1`），按 main 最新代码重新打包并覆盖该 Release 的资产
+
 ## 已知限制
 
 - 暂未实现自动更新和多语言
