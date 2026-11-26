@@ -1,6 +1,6 @@
 {
   "name": "codex-speed-app",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Standalone floating speedometer for Codex sessions. Reads local rollout logs, no plugin required.",
   "type": "module",
   "main": "src/main/index.mjs",
