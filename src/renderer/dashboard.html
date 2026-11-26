@@ -42,6 +42,11 @@
       <div class="big"><span id="ttft">—</span><span class="unit" id="ttftUnit"></span></div>
       <div class="meta" id="ttftMeta">—</div>
     </article>
+    <article class="card" title="前缀命中率 = 命中前缀缓存的输入 token / 总输入 token（会话累计）">
+      <div class="label">前缀命中</div>
+      <div class="big"><span id="cacheRate">—</span><span class="unit" id="cacheUnit"></span></div>
+      <div class="meta" id="cacheMeta">—</div>
+    </article>
   </section>
 
   <section class="panel">
@@ -60,6 +65,7 @@
             <th>模型</th>
             <th class="num">速度</th>
             <th class="num">输出</th>
+            <th class="num">前缀命中</th>
             <th>状态</th>
             <th></th>
           </tr>
@@ -81,6 +87,7 @@
             <th class="num">响应速度</th>
             <th class="num">墙钟速度</th>
             <th class="num">首 token</th>
+            <th class="num">前缀命中</th>
           </tr>
         </thead>
         <tbody id="turns"></tbody>

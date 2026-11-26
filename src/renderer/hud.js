@@ -7,7 +7,7 @@ const api = window.codexSpeed;
 const $ = (id) => document.getElementById(id);
 
 // 主进程首次推设置之前用的兜底字段，避免第一帧空白
-const DEFAULT_FIELDS = ["tps", "ttft", "mspt", "latency", "turn", "spark"];
+const DEFAULT_FIELDS = ["tps", "ttft", "mspt", "latency", "cache", "turn", "spark"];
 
 // 小字统计格：两列，标签在左、值在右。值的含义见 title（悬停可看）。
 const STAT_FIELDS = [
@@ -25,6 +25,11 @@ const STAT_FIELDS = [
     key: "latency",
     label: "响应耗时",
     title: "上一次完整响应的端到端耗时",
+  },
+  {
+    key: "cache",
+    label: "前缀命中",
+    title: "上一次响应输入 token 命中前缀缓存的比例；还没有响应时显示会话累计",
   },
   {
     key: "session",
@@ -91,6 +96,14 @@ function fmtSeconds(sec) {
   const n = Number(sec);
   if (!Number.isFinite(n) || n <= 0) return "—";
   return `${n.toFixed(2)} s`;
+}
+
+/** 比例（0–1）→ “98.9%”；null/undefined 表示没有缓存数据，显示 “—” 而不是 0% */
+function fmtPercent(ratio) {
+  if (ratio == null) return "—";
+  const n = Number(ratio);
+  if (!Number.isFinite(n)) return "—";
+  return `${(n * 100).toFixed(1)}%`;
 }
 
 /** 每 token 毫秒数：小于 10 ms 时保留一位小数，否则取整 */
@@ -170,6 +183,8 @@ function updateStats(snap) {
   setStat("ttft", fmtMs(ttftMs(snap)));
   setStat("mspt", fmtPerToken(perToken));
   setStat("latency", fmtSeconds(lastSeconds));
+  // 前缀命中：优先上次响应（与当前速度最相关），还没有响应时退回会话累计
+  setStat("cache", fmtPercent(live.lastResponse?.cacheHitRate ?? session.cacheHitRate));
   setStat(
     "session",
     Number(session.avgTokensPerSec) > 0

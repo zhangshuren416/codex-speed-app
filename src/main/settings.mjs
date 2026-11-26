@@ -9,12 +9,21 @@ export const HUD_FIELDS = Object.freeze([
   "ttft", // 首 token 时延
   "mspt", // 每 token 时延
   "latency", // 单次响应端到端耗时
+  "cache", // 前缀命中率
   "turn", // 本轮摘要
   "session", // 会话均速
   "spark", // 迷你曲线
 ]);
 
-const DEFAULT_HUD_FIELDS = Object.freeze(["tps", "ttft", "mspt", "latency", "turn", "spark"]);
+const DEFAULT_HUD_FIELDS = Object.freeze([
+  "tps",
+  "ttft",
+  "mspt",
+  "latency",
+  "cache",
+  "turn",
+  "spark",
+]);
 
 // 边缘吸附可选的四条边
 export const DOCK_EDGES = Object.freeze(["left", "right", "top", "bottom"]);

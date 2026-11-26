@@ -79,6 +79,87 @@ test("同一次响应被 token_usage_record 与 token_count 重复上报时只�
   assert.equal(metrics.session.responses, 1);
 });
 
+test("前缀命中率：上次响应 / 本轮 / 会话累计，跨轮只统计本轮", () => {
+  const home = makeHome();
+  const start = BASE;
+  // 第一轮第一次响应：输入 1000，命中 900
+  const lines = responseLines({
+    id: "sess-cache",
+    start,
+    inputTokens: 1000,
+    cachedInputTokens: 900,
+  });
+  // 本轮有两次响应：去掉 helper 自动生成的 task_complete，改在第二次响应后结束
+  lines.pop();
+  // 第一轮第二次响应：输入 2000，命中 1500 → 本轮 2400/3000 = 80%
+  lines.push(
+    entry(start + 25_000, "token_usage_record", {
+      usage: { output_tokens: 50, reasoning_output_tokens: 5, input_tokens: 2000, cached_input_tokens: 1500 },
+      thread_token_usage: { output_tokens: 150, reasoning_output_tokens: 25, input_tokens: 3000, cached_input_tokens: 2400 },
+      response_id: "r2",
+    }),
+    entry(start + 25_100, "event_msg", {
+      type: "task_complete",
+      completed_at: Math.floor((start + 25_100) / 1000),
+      duration_ms: 25_100,
+      time_to_first_token_ms: 800,
+    }),
+    // 第二轮：输入 4000，命中 3800 → 本轮 95%，会话 6200/7000
+    entry(start + 30_000, "event_msg", { type: "task_started", turn_id: "turn-2", started_at: Math.floor((start + 30_000) / 1000) }),
+    entry(start + 40_000, "token_usage_record", {
+      usage: { output_tokens: 80, reasoning_output_tokens: 0, input_tokens: 4000, cached_input_tokens: 3800 },
+      thread_token_usage: { output_tokens: 230, reasoning_output_tokens: 25, input_tokens: 7000, cached_input_tokens: 6200 },
+      response_id: "r3",
+    })
+  );
+  const file = writeRollout(home, { name: "rollout-2026-11-01T00-00-00-sess-cache.jsonl", lines });
+
+  const reader = new RolloutReader(file);
+  reader.prime();
+  const metrics = computeMetrics(reader.state, start + 45_000);
+
+  assert.equal(metrics.live.lastResponse.cacheHitRate, 0.95);
+  assert.equal(metrics.live.lastResponse.inputTokens, 4000);
+  assert.equal(metrics.live.lastResponse.cachedInputTokens, 3800);
+  assert.equal(metrics.turn.inputTokens, 4000);
+  assert.equal(metrics.turn.cachedInputTokens, 3800);
+  assert.equal(metrics.turn.cacheHitRate, 0.95);
+  assert.equal(metrics.session.inputTokens, 7000);
+  assert.equal(metrics.session.cachedInputTokens, 6200);
+  assert.equal(metrics.session.cacheHitRate, 0.8857);
+  // 已完成轮的摘要也带命中率（第一轮 2400/3000）
+  assert.equal(metrics.turnHistory.length, 1);
+  assert.equal(metrics.turnHistory[0].cacheHitRate, 0.8);
+});
+
+test("前缀命中率：没有缓存字段返回 null，命中为 0 返回 0", () => {
+  const home = makeHome();
+  const noCache = writeRollout(home, {
+    name: "rollout-2026-11-01T00-00-00-sess-nocache.jsonl",
+    lines: responseLines({ id: "sess-nocache", start: BASE }),
+  });
+  const zeroCache = writeRollout(home, {
+    name: "rollout-2026-11-01T00-01-00-sess-zerocache.jsonl",
+    lines: responseLines({ id: "sess-zerocache", start: BASE, cachedInputTokens: 0 }),
+  });
+
+  const r1 = new RolloutReader(noCache);
+  r1.prime();
+  const m1 = computeMetrics(r1.state, BASE + 20_000);
+  assert.equal(m1.session.cacheHitRate, null);
+  assert.equal(m1.turn.cacheHitRate, null);
+  assert.equal(m1.live.lastResponse.cacheHitRate, null);
+  assert.equal(m1.turnHistory[0].cacheHitRate, null);
+
+  const r2 = new RolloutReader(zeroCache);
+  r2.prime();
+  const m2 = computeMetrics(r2.state, BASE + 20_000);
+  // 0% 命中是有效数据，不能和“缺数据”混淆
+  assert.equal(m2.session.cacheHitRate, 0);
+  assert.equal(m2.turn.cacheHitRate, 0);
+  assert.equal(m2.live.lastResponse.cacheHitRate, 0);
+});
+
 test("工具执行时间不计入下一次响应的分母", () => {
   const home = makeHome();
   const start = BASE;
@@ -228,12 +309,23 @@ test("没有会话日志时返回 no-session", () => {
 test("悬浮窗显示字段：未知项被丢弃、去重、按固定顺序排列", () => {
   assert.deepEqual(normalizeHudFields(["spark", "bogus", "tps", "tps"]), ["tps", "spark"]);
   assert.deepEqual(normalizeHudFields(["latency", "ttft"]), ["ttft", "latency"]);
+  assert.deepEqual(normalizeHudFields(["cache", "tps"]), ["tps", "cache"]);
   // 空数组是合法状态（用户把显示内容全关了），不能被补回默认值
   assert.deepEqual(normalizeHudFields([]), []);
   // 旧版设置文件没有这个键、或值被写坏时回落到默认值
   assert.deepEqual(normalizeHudFields(undefined), DEFAULTS.hudFields);
   assert.deepEqual(normalizeHudFields("tps"), DEFAULTS.hudFields);
-  assert.equal(HUD_FIELDS.length, 7);
+  assert.equal(HUD_FIELDS.length, 8);
+  // 新装默认展示前缀命中率；老设置文件没有 cache 时保持用户原选择，不强行塞入
+  assert.ok(DEFAULTS.hudFields.includes("cache"));
+  assert.deepEqual(normalizeHudFields(["tps", "ttft", "mspt", "latency", "turn", "spark"]), [
+    "tps",
+    "ttft",
+    "mspt",
+    "latency",
+    "turn",
+    "spark",
+  ]);
 });
 
 test("设置持久化：hudFields 能读回并保持规范顺序", () => {

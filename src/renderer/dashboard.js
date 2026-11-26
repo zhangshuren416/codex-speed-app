@@ -25,6 +25,9 @@ const el = {
   ttft: $("ttft"),
   ttftUnit: $("ttftUnit"),
   ttftMeta: $("ttftMeta"),
+  cacheRate: $("cacheRate"),
+  cacheUnit: $("cacheUnit"),
+  cacheMeta: $("cacheMeta"),
   sessions: $("sessions"),
   sessionsEmpty: $("sessionsEmpty"),
   turns: $("turns"),
@@ -52,6 +55,7 @@ const HUD_FIELD_OPTIONS = [
   ["ttft", "首 token 时延"],
   ["mspt", "每 token 时延"],
   ["latency", "响应耗时"],
+  ["cache", "前缀命中率"],
   ["turn", "本轮摘要"],
   ["session", "会话均速"],
   ["spark", "迷你曲线"],
@@ -78,6 +82,14 @@ function fmtRate(value) {
 function fmtSeconds(ms) {
   if (!Number.isFinite(ms) || ms <= 0) return "—";
   return `${(ms / 1000).toFixed(2)}s`;
+}
+
+/** 比例（0–1）→ “98.9%”；null/undefined 表示没有缓存数据，显示 “—” 而不是 0% */
+function fmtPercent(ratio) {
+  if (ratio == null) return "—";
+  const n = Number(ratio);
+  if (!Number.isFinite(n)) return "—";
+  return `${(n * 100).toFixed(1)}%`;
 }
 
 function fmtTime(ms) {
@@ -128,6 +140,9 @@ function renderStats() {
     el.ttft.textContent = "—";
     el.ttftUnit.textContent = "";
     el.ttftMeta.textContent = "—";
+    el.cacheRate.textContent = "—";
+    el.cacheUnit.textContent = "";
+    el.cacheMeta.textContent = "—";
     return;
   }
 
@@ -154,6 +169,19 @@ function renderStats() {
   }
   el.ttftMeta.textContent =
     turn.avgMsPerToken != null ? `平均 ${turn.avgMsPerToken} ms/token` : "日志里还没有本轮耗时";
+
+  // 前缀命中：大数字是会话累计，meta 里给出上次响应与缓存/总输入 token
+  if (session.cacheHitRate != null) {
+    el.cacheRate.textContent = (session.cacheHitRate * 100).toFixed(1);
+    el.cacheUnit.textContent = "%";
+    el.cacheMeta.textContent = `上次响应 ${fmtPercent(
+      live.lastResponse?.cacheHitRate
+    )} · 缓存 ${fmtCompact(session.cachedInputTokens)} / ${fmtCompact(session.inputTokens)} tok`;
+  } else {
+    el.cacheRate.textContent = "—";
+    el.cacheUnit.textContent = "";
+    el.cacheMeta.textContent = "日志里没有缓存用量数据";
+  }
 }
 
 function renderTurns() {
@@ -169,6 +197,7 @@ function renderTurns() {
       fmtRate(turn.avgTokensPerSec),
       fmtRate(turn.wallTokensPerSec),
       fmtSeconds(turn.timeToFirstTokenMs),
+      fmtPercent(turn.cacheHitRate),
     ];
     cells.forEach((text, index) => {
       const td = document.createElement("td");
@@ -206,6 +235,11 @@ function sessionRow(session, options = {}) {
   tdOut.className = "num";
   tdOut.textContent = fmtCompact(session.outputTokens);
   tr.append(tdOut);
+
+  const tdCache = document.createElement("td");
+  tdCache.className = "num";
+  tdCache.textContent = fmtPercent(session.cacheHitRate);
+  tr.append(tdCache);
 
   const tdStatus = document.createElement("td");
   const tag = document.createElement("span");

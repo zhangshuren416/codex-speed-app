@@ -26,6 +26,8 @@ const summary = {
   tokensPerSec: snap.ok ? snap.live?.tokensPerSec ?? null : null,
   outputTokens: snap.ok ? snap.session?.outputTokens ?? null : null,
   responses: snap.ok ? snap.session?.responses ?? null : null,
+  cacheHitRate: snap.ok ? snap.session?.cacheHitRate ?? null : null,
+  lastCacheHitRate: snap.ok ? snap.live?.lastResponse?.cacheHitRate ?? null : null,
   pinned: Boolean(snap.pinned),
   file: snap.ok ? snap.session?.file ?? null : null,
   sessions: monitor.listSessions(5).length,

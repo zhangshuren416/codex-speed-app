@@ -91,6 +91,7 @@ const HUD_FIELD_LABELS = [
   ["ttft", "首 token 时延"],
   ["mspt", "每 token 时延"],
   ["latency", "响应耗时"],
+  ["cache", "前缀命中率"],
   ["turn", "本轮摘要"],
   ["session", "会话均速"],
   ["spark", "迷你曲线"],
@@ -318,7 +319,7 @@ function estimateHudHeight(fields) {
   let height = 21; // 上下内边距
   height += 20; // 标题行
   if (has("tps")) height += 46;
-  const cells = ["ttft", "mspt", "latency", "session"].filter(has).length;
+  const cells = ["ttft", "mspt", "latency", "cache", "session"].filter(has).length;
   if (cells) height += Math.ceil(cells / 2) * 17 + 6;
   if (has("turn")) height += 15;
   if (has("spark")) height += 45;
@@ -391,6 +392,7 @@ function createHud() {
           tps: document.getElementById("tps")?.textContent,
           status: document.getElementById("status")?.textContent,
           turn: document.getElementById("turn")?.textContent,
+          stats: document.getElementById("stats")?.textContent,
           canvasWidth: document.getElementById("spark")?.width,
           bodyClass: document.body.className
         }))()`)
@@ -933,6 +935,8 @@ function showDashboard() {
           status: document.getElementById("status")?.textContent,
           sessionRows: document.querySelectorAll("#sessions tr").length,
           turnRows: document.querySelectorAll("#turns tr").length,
+          cacheRate: document.getElementById("cacheRate")?.textContent,
+          cacheMeta: document.getElementById("cacheMeta")?.textContent,
           opacity: document.getElementById("opacity")?.value,
           sub: document.getElementById("sub")?.textContent
         }))()`)

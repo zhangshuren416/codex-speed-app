@@ -33,11 +33,19 @@ export function responseLines({
   outputTokens = 100,
   reasoningTokens = 20,
   inputTokens = 40,
+  cachedInputTokens = null,
   timeToFirstTokenMs = 800,
   responseId = "resp-1",
 } = {}) {
   const end = start + durationMs;
   const cumOut = outputTokens;
+  const usage = {
+    output_tokens: outputTokens,
+    reasoning_output_tokens: reasoningTokens,
+    input_tokens: inputTokens,
+  };
+  // 不传 cachedInputTokens 时保持旧日志形态（没有缓存字段）
+  if (cachedInputTokens != null) usage.cached_input_tokens = cachedInputTokens;
   return [
     entry(start - 1000, "session_meta", {
       session_id: id,
@@ -51,16 +59,8 @@ export function responseLines({
       started_at: Math.floor(start / 1000),
     }),
     entry(end, "token_usage_record", {
-      usage: {
-        output_tokens: outputTokens,
-        reasoning_output_tokens: reasoningTokens,
-        input_tokens: inputTokens,
-      },
-      thread_token_usage: {
-        output_tokens: cumOut,
-        reasoning_output_tokens: reasoningTokens,
-        input_tokens: inputTokens,
-      },
+      usage,
+      thread_token_usage: { ...usage, output_tokens: cumOut },
       response_id: responseId,
     }),
     entry(end + 100, "event_msg", {

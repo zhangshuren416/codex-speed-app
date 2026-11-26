@@ -12,6 +12,16 @@
 //   - 会话均值累计在 state.agg 里，不受滚动样本窗口截断影响；但如果只读了文件尾部
 //     （truncatedStart = true），会话均值/响应数只覆盖窗口内样本，此时不应把它当成完整会话统计。
 
+/**
+ * 前缀命中率 = 命中前缀缓存的输入 token / 总输入 token（input_tokens 本身含缓存部分）。
+ * 没有输入或没有缓存数据时返回 null，前端显示 “—”，避免把“缺数据”误显示成 0%。
+ * 结果夹在 [0, 1]，保留 4 位小数（百分比显示一位小数足够）。
+ */
+export function hitRate(cached, input) {
+  if (!Number.isFinite(cached) || !Number.isFinite(input) || input <= 0) return null;
+  return round(Math.min(1, Math.max(0, cached / input)), 4);
+}
+
 const SAMPLE_WINDOW_MS = 60_000;
 // 最近几次响应合并成“当前速度”。取 3 而不是 5：一次长响应就能占满 1–2 分钟，
 // 窗口太大时数字会长时间纹丝不动，看起来像卡死。
@@ -68,6 +78,10 @@ export function computeMetrics(state, nowMs = Date.now()) {
   const turnOutput = Math.max(0, totalOut - (state.turn?.outputStart ?? 0));
   const turnReasoning = Math.max(0, totalReason - (state.turn?.reasoningStart ?? 0));
   const turnReasoningShare = turnOutput > 0 ? turnReasoning / turnOutput : 0;
+  // 本轮输入/缓存 token：与输出一样用“累计 - 轮起点”的差值。
+  // 累计输入是各次响应 input_tokens 之和（每次响应都重发完整上下文），差值即本轮总和。
+  const turnInput = Math.max(0, state.totals.input - (state.turn?.inputStart ?? 0));
+  const turnCached = Math.max(0, state.totals.cached - (state.turn?.cachedStart ?? 0));
 
   // 端到端吞吐：把工具执行、等待用户的时间也算进去，代表“用户体感的产出速度”
   let turnWallRate = null;
@@ -111,6 +125,9 @@ export function computeMetrics(state, nowMs = Date.now()) {
                 : null,
             outputTokens: lastResponse.outputTokens,
             reasoningTokens: lastResponse.reasoningTokens,
+            inputTokens: lastResponse.inputTokens,
+            cachedInputTokens: lastResponse.cachedInputTokens,
+            cacheHitRate: hitRate(lastResponse.cachedInputTokens, lastResponse.inputTokens),
             seconds: round(lastResponse.seconds, 2),
             genSeconds: round(lastResponse.genSeconds, 2),
             atMs: lastResponse.atMs,
@@ -124,6 +141,9 @@ export function computeMetrics(state, nowMs = Date.now()) {
       outputTokens: turnOutput,
       reasoningTokens: turnReasoning,
       reasoningShare: round(turnReasoningShare, 3),
+      inputTokens: turnInput,
+      cachedInputTokens: turnCached,
+      cacheHitRate: state.cacheSeen ? hitRate(turnCached, turnInput) : null,
       wallSeconds: round(turnSeconds ?? 0, 1),
       responseSeconds: round(turnAgg.secs, 1),
       responses: turnAgg.count,
@@ -147,6 +167,7 @@ export function computeMetrics(state, nowMs = Date.now()) {
       reasoningTokens: totalReason,
       inputTokens: state.totals.input,
       cachedInputTokens: state.totals.cached,
+      cacheHitRate: state.cacheSeen ? hitRate(state.totals.cached, state.totals.input) : null,
       reasoningShare: round(reasoningShare, 3),
       avgTokensPerSec: round(sessionAvg ?? 0),
       wallTokensPerSec: round(sessionWallRate ?? 0),

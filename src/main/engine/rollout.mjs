@@ -19,6 +19,7 @@
 
 import fs from "node:fs";
 import { StringDecoder } from "node:string_decoder";
+import { hitRate } from "./metrics.mjs";
 
 const MAX_SAMPLES = 600;
 // 凭经验，单次响应超过 400 tok/s 基本意味着分母塌缩（计时锚点错误），
@@ -53,6 +54,8 @@ export function createState() {
     contextWindow: null,
     rateLimits: null,
     totals: { output: 0, reasoning: 0, input: 0, cached: 0 },
+    // 日志是否上报过 cached_input_tokens 字段：区分“命中率 0%”与“没有缓存数据”
+    cacheSeen: false,
     turn: {
       id: null,
       active: false,
@@ -295,6 +298,8 @@ export class RolloutReader {
           endedAtMs: null,
           outputStart: st.totals.output,
           reasoningStart: st.totals.reasoning,
+          inputStart: st.totals.input,
+          cachedStart: st.totals.cached,
           lastResponseEndMs: null,
         };
         st.turnSampleStart = st.samples.length;
@@ -333,6 +338,8 @@ export class RolloutReader {
           0,
           st.totals.reasoning - (st.turn.reasoningStart ?? 0)
         );
+        const inputDelta = Math.max(0, st.totals.input - (st.turn.inputStart ?? 0));
+        const cachedDelta = Math.max(0, st.totals.cached - (st.turn.cachedStart ?? 0));
         const previous = st.turnHistory[st.turnHistory.length - 1];
         if (!previous || previous.endedAtMs !== endedAtMs || previous.id !== st.turn.id) {
           st.turnHistory.push({
@@ -340,6 +347,9 @@ export class RolloutReader {
             endedAtMs,
             outputTokens: outDelta,
             reasoningTokens: reasonDelta,
+            inputTokens: inputDelta,
+            cachedInputTokens: cachedDelta,
+            cacheHitRate: st.cacheSeen ? hitRate(cachedDelta, inputDelta) : null,
             responses: turnSamples.length,
             avgTokensPerSec: avgRate != null ? round1(avgRate) : null,
             wallTokensPerSec: wallRate != null ? round1(wallRate) : null,
@@ -374,6 +384,12 @@ export class RolloutReader {
           st.totals.reasoning = total.reasoning_output_tokens ?? st.totals.reasoning;
           st.totals.input = total.input_tokens ?? st.totals.input;
           st.totals.cached = total.cached_input_tokens ?? st.totals.cached;
+        }
+        if (
+          typeof total.cached_input_tokens === "number" ||
+          typeof (p.info?.last_token_usage ?? {}).cached_input_tokens === "number"
+        ) {
+          st.cacheSeen = true;
         }
         // token_usage_record 已覆盖的情况在这里会被去重
         this._recordSample(
@@ -423,6 +439,7 @@ export class RolloutReader {
     if (!usage) return;
     const cumOut = (p.thread_token_usage ?? {}).output_tokens;
     if (typeof usage.output_tokens !== "number") return;
+    if (typeof usage.cached_input_tokens === "number") st.cacheSeen = true;
     // 会话累计口径（token_usage_record 的 thread_token_usage 与 token_count 的
     // total_token_usage 数值一致，可共用去重逻辑）
     if (typeof cumOut === "number") {
